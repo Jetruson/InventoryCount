@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidCount(data) {
+      return data.keys().hasAll(['username', 'userId', 'store', 'sku', 'countedQuantity', 'date', 'time']) &&
+             data.userId == request.auth.uid &&
+             data.countedQuantity is number &&
+             data.countedQuantity >= 0 &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 64 &&
+             data.username is string && data.username.size() > 0 && data.username.size() <= 100 &&
+             data.store is string && data.store.size() > 0 && data.store.size() <= 100;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['sku', 'barcode', 'description']) &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 64 &&
+             data.barcode is string && data.barcode.size() > 0 && data.barcode.size() <= 64 &&
+             data.description is string && data.description.size() > 0 && data.description.size() <= 200;
+    }
+
+    // Inventory Counts Collection
+    match /inventory_counts/{countId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidCount(request.resource.data);
+      allow update: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        request.resource.data.userId == resource.data.userId
+      ) && request.resource.data.countedQuantity >= 0;
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid);
+    }
+
+    // Products Master Catalog
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidProduct(request.resource.data);
+      allow delete: if isSignedIn();
+    }
+
+    // Retail Stores
+    match /stores/{storeId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // User Profiles
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId);
+    }
+  }
+}

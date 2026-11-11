@@ -1,0 +1,179 @@
+{
+  "entities": {
+    "InventoryCount": {
+      "title": "InventoryCount",
+      "description": "A single physical stock count record submitted by a store associate",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique count record identifier"
+        },
+        "username": {
+          "type": "string",
+          "description": "Display name of the user who performed the count"
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID of the user who performed the count"
+        },
+        "store": {
+          "type": "string",
+          "description": "Store name or code where the count took place"
+        },
+        "storeId": {
+          "type": "string",
+          "description": "Store identifier"
+        },
+        "sku": {
+          "type": "string",
+          "description": "Stock Keeping Unit code"
+        },
+        "barcode": {
+          "type": "string",
+          "description": "Scanned or manually entered barcode"
+        },
+        "itemDescription": {
+          "type": "string",
+          "description": "Description of the scanned item"
+        },
+        "countedQuantity": {
+          "type": "number",
+          "description": "Physical quantity counted (>= 0)"
+        },
+        "remarks": {
+          "type": "string",
+          "description": "Optional notes or damage remarks"
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical shelf, aisle, bin, or bay location barcode/code"
+        },
+        "date": {
+          "type": "string",
+          "description": "Date of count in YYYY-MM-DD format"
+        },
+        "time": {
+          "type": "string",
+          "description": "Time of count in HH:mm:ss format"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the record was saved"
+        }
+      },
+      "required": ["username", "userId", "store", "sku", "countedQuantity", "date", "time"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Product catalog item with SKU and barcode mapping",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique product catalog ID"
+        },
+        "sku": {
+          "type": "string",
+          "description": "Unique SKU code"
+        },
+        "barcode": {
+          "type": "string",
+          "description": "Barcode number (EAN, UPC, Code128)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Product item title and description"
+        },
+        "category": {
+          "type": "string",
+          "description": "Merchandising category"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Inventory unit of measure (e.g. pcs, box, kg)"
+        }
+      },
+      "required": ["sku", "barcode", "description"]
+    },
+    "Store": {
+      "title": "Store",
+      "description": "Retail store location",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Store document ID"
+        },
+        "storeId": {
+          "type": "string",
+          "description": "Store code (e.g., ST-101)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Retail branch store name"
+        },
+        "location": {
+          "type": "string",
+          "description": "City or mall location"
+        }
+      },
+      "required": ["storeId", "name"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role and preferences",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "User ID matching auth.uid"
+        },
+        "username": {
+          "type": "string",
+          "description": "Display name"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "role": {
+          "type": "string",
+          "description": "User role: counter or supervisor"
+        },
+        "defaultStore": {
+          "type": "string",
+          "description": "Default assigned store"
+        }
+      },
+      "required": ["username", "email"]
+    }
+  },
+  "firestore": {
+    "/inventory_counts/{countId}": {
+      "schema": {
+        "$ref": "#/entities/InventoryCount"
+      },
+      "description": "Collection of recorded inventory counts"
+    },
+    "/products/{productId}": {
+      "schema": {
+        "$ref": "#/entities/Product"
+      },
+      "description": "Product master catalog for barcode and SKU lookups"
+    },
+    "/stores/{storeId}": {
+      "schema": {
+        "$ref": "#/entities/Store"
+      },
+      "description": "Retail stores directory"
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Registered app users and counter profiles"
+    }
+  }
+}

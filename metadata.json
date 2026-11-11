@@ -1,0 +1,6 @@
+{
+  "name": "Inventory Count",
+  "description": "Mobile-friendly retail inventory counting PWA with barcode scanning, store filtering, supervisor monitoring, and Excel export.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
