@@ -154,8 +154,14 @@ export const TopNav: React.FC<TopNavProps> = ({
                       {user.email || 'local-session'}
                     </div>
                     <div className="pt-1 flex items-center gap-1.5">
-                      <span className="rounded-md bg-emerald-500/15 text-emerald-400 px-2 py-0.5 text-[10px] font-bold capitalize">
-                        {user.role} Associate
+                      <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                        user.role === 'admin'
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                          : user.role === 'supervisor'
+                          ? 'bg-amber-500/15 text-amber-400'
+                          : 'bg-emerald-500/15 text-emerald-400'
+                      }`}>
+                        {user.role === 'admin' ? 'System Administrator' : `${user.role} Associate`}
                       </span>
                       <span className="text-[10px] text-slate-500">· {activeStore.storeId}</span>
                     </div>

@@ -18,6 +18,7 @@ import {
   Building2,
   ArrowRight,
   ShieldCheck,
+  ShieldAlert,
   Zap,
 } from 'lucide-react';
 
@@ -31,25 +32,31 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
   const [password, setPassword] = useState<string>('');
   const [displayName, setDisplayName] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<string>(DEFAULT_STORES[0].storeId);
-  const [userRole, setUserRole] = useState<'counter' | 'supervisor'>('counter');
+  const [userRole, setUserRole] = useState<'counter' | 'supervisor' | 'admin'>('counter');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const selectedStore = DEFAULT_STORES.find(s => s.storeId === selectedStoreId) || DEFAULT_STORES[0];
 
   // Quick Demo fill buttons
-  const fillDemoAccount = (role: 'counter' | 'supervisor') => {
+  const fillDemoAccount = (role: 'counter' | 'supervisor' | 'admin') => {
     if (role === 'counter') {
       setEmail('counter1@retailstore.com');
       setPassword('Store123!');
       setDisplayName('Alex Mercer');
       setUserRole('counter');
       setSelectedStoreId('ST-101');
-    } else {
+    } else if (role === 'supervisor') {
       setEmail('supervisor@retailstore.com');
       setPassword('Supervisor123!');
       setDisplayName('Sarah Jenkins');
       setUserRole('supervisor');
+      setSelectedStoreId('ST-101');
+    } else {
+      setEmail('admin@retailstore.com');
+      setPassword('Admin123!');
+      setDisplayName('Jet Gonzalgo');
+      setUserRole('admin');
       setSelectedStoreId('ST-101');
     }
     setErrorMessage(null);
@@ -65,8 +72,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
       const result = await signInWithPopup(auth, provider);
       const fbUser = result.user;
 
-      const resolvedRole: 'counter' | 'supervisor' = fbUser.email?.includes('supervisor') ? 'supervisor' : userRole;
-      const resolvedName = fbUser.displayName || fbUser.email?.split('@')[0] || 'Store Associate';
+      const isUserAdmin =
+        fbUser.email?.toLowerCase() === 'jetgonzalgo@gmail.com' ||
+        fbUser.email?.toLowerCase().includes('admin');
+      const isUserSupervisor = fbUser.email?.toLowerCase().includes('supervisor');
+
+      const resolvedRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
+        ? 'admin'
+        : isUserSupervisor
+        ? 'supervisor'
+        : userRole;
+
+      const resolvedName = fbUser.displayName || fbUser.email?.split('@')[0] || (isUserAdmin ? 'Jet Gonzalgo' : 'Store Associate');
 
       try {
         await setDoc(doc(db, 'users', fbUser.uid), {
@@ -102,12 +119,30 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
 
   // Seamless Instant Store Counter Session (when Email/Password provider is not yet enabled in Firebase Console)
   const handleInstantCounterSession = () => {
-    const resolvedName = displayName.trim() || email.split('@')[0] || (userRole === 'supervisor' ? 'Sarah Jenkins' : 'Alex Mercer');
+    const isUserAdmin =
+      email.toLowerCase() === 'jetgonzalgo@gmail.com' ||
+      email.toLowerCase().includes('admin') ||
+      userRole === 'admin';
+    const isUserSupervisor = email.toLowerCase().includes('supervisor') || userRole === 'supervisor';
+
+    const effectiveRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
+      ? 'admin'
+      : isUserSupervisor
+      ? 'supervisor'
+      : 'counter';
+
+    const defaultName = isUserAdmin
+      ? 'Jet Gonzalgo (Admin)'
+      : isUserSupervisor
+      ? 'Sarah Jenkins'
+      : 'Alex Mercer';
+
+    const resolvedName = displayName.trim() || email.split('@')[0] || defaultName;
     const localUser: AppUser = {
       uid: `local-usr-${Date.now()}`,
       email: email.trim() || `${resolvedName.toLowerCase().replace(/\s+/g, '')}@store.local`,
       displayName: resolvedName,
-      role: userRole,
+      role: effectiveRole,
       activeStoreId: selectedStore.storeId,
     };
 
@@ -177,8 +212,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
         // Sign in existing user
         try {
           const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-          let fetchedRole: 'counter' | 'supervisor' = userRole;
+          let fetchedRole: 'counter' | 'supervisor' | 'admin' = userRole;
           let fetchedName = cred.user.displayName || displayName || email.split('@')[0];
+
+          if (email.toLowerCase() === 'jetgonzalgo@gmail.com' || email.toLowerCase().includes('admin')) {
+            fetchedRole = 'admin';
+          } else if (email.toLowerCase().includes('supervisor')) {
+            fetchedRole = 'supervisor';
+          }
 
           try {
             const userDoc = await getDoc(doc(db, 'users', cred.user.uid));
@@ -212,7 +253,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
           if (signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') {
             try {
               const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-              const resolvedName = displayName.trim() || (email.includes('supervisor') ? 'Sarah Jenkins' : 'Alex Mercer');
+              const isUserAdmin =
+                email.toLowerCase() === 'jetgonzalgo@gmail.com' ||
+                email.toLowerCase().includes('admin') ||
+                userRole === 'admin';
+              const isUserSupervisor = email.toLowerCase().includes('supervisor') || userRole === 'supervisor';
+              const resolvedRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
+                ? 'admin'
+                : isUserSupervisor
+                ? 'supervisor'
+                : 'counter';
+
+              const defaultName = isUserAdmin ? 'Jet Gonzalgo' : isUserSupervisor ? 'Sarah Jenkins' : 'Alex Mercer';
+              const resolvedName = displayName.trim() || defaultName;
               await updateProfile(cred.user, { displayName: resolvedName });
 
               setStoredActiveStore(selectedStore);
@@ -221,7 +274,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
                   uid: cred.user.uid,
                   email: cred.user.email || email.trim(),
                   displayName: resolvedName,
-                  role: email.includes('supervisor') ? 'supervisor' : 'counter',
+                  role: resolvedRole,
                   activeStoreId: selectedStore.storeId,
                 },
                 selectedStore
@@ -281,7 +334,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             <span className="font-semibold text-slate-300">Quick Test Credentials:</span>
             <span className="text-[10px] text-emerald-400 font-mono">1-Tap Fill</span>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <button
               type="button"
               onClick={() => fillDemoAccount('counter')}
@@ -297,13 +350,25 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             <button
               type="button"
               onClick={() => fillDemoAccount('supervisor')}
-              className="rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/50 p-2.5 text-left transition active:scale-95"
+              className="rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 p-2.5 text-left transition active:scale-95"
             >
               <div className="text-xs font-bold text-white flex items-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
                 <span>Store Supervisor</span>
               </div>
               <div className="text-[11px] text-slate-400 truncate mt-0.5">Sarah Jenkins</div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => fillDemoAccount('admin')}
+              className="rounded-xl bg-slate-950 border border-slate-800 hover:border-purple-500/50 p-2.5 text-left transition active:scale-95"
+            >
+              <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                <ShieldAlert className="w-3.5 h-3.5 text-purple-400" />
+                <span>System Admin</span>
+              </div>
+              <div className="text-[11px] text-slate-400 truncate mt-0.5">Jet Gonzalgo</div>
             </button>
           </div>
         </div>
@@ -365,22 +430,66 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Display Name (Required on Register) */}
             {isRegisterMode && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Your Full Name / Username <span className="text-emerald-400">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="e.g. Alex Mercer"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 pl-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-                    required
-                  />
-                  <User className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+              <>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Your Full Name / Username <span className="text-emerald-400">*</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="e.g. Alex Mercer"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 pl-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                      required
+                    />
+                    <User className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+                  </div>
                 </div>
-              </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Account Role & Permissions <span className="text-emerald-400">*</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setUserRole('counter')}
+                      className={`py-2 rounded-lg transition ${
+                        userRole === 'counter' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Counter
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUserRole('supervisor')}
+                      className={`py-2 rounded-lg transition ${
+                        userRole === 'supervisor' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Supervisor
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUserRole('admin')}
+                      className={`py-2 rounded-lg transition ${
+                        userRole === 'admin' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Admin
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    {userRole === 'admin'
+                      ? 'Admin: Upload item masterlist and extract counted inventory.'
+                      : userRole === 'supervisor'
+                      ? 'Supervisor: Team overview and store auditing (extraction restricted to Admin).'
+                      : 'Counter: Barcode scanning and physical inventory counts.'}
+                  </div>
+                </div>
+              </>
             )}
 
             {/* Email / Username */}

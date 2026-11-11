@@ -36,6 +36,28 @@ export interface AppUser {
   uid: string;
   email: string;
   displayName: string;
-  role: 'counter' | 'supervisor';
+  role: 'counter' | 'supervisor' | 'admin';
   activeStoreId?: string;
+}
+
+export interface MasterlistItem {
+  sku: string;
+  barcode: string;
+  description: string;
+  category?: string;
+  unit?: string;
+  systemStock?: number;
+}
+
+export interface CountVarianceItem {
+  sku: string;
+  barcode: string;
+  description: string;
+  category: string;
+  systemStock: number;
+  countedQuantity: number;
+  variance: number; // countedQuantity - systemStock
+  status: 'matched' | 'over' | 'under' | 'uncounted';
+  storesFound: string[];
+  locationsFound: string[];
 }

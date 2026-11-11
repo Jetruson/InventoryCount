@@ -30,24 +30,34 @@ A retail stock counting Progressive Web App (PWA) optimized for Android phones a
   - Filter counts by date (*Today*, *Yesterday*, *Past 7 Days*, *All Time*).
   - Search by SKU, description, barcode, or location.
   - Sync indicator showing cloud-synced vs. pending-offline sync.
-- **Supervisor Dashboard & Excel Export**:
+- **Supervisor Dashboard**:
   - View all count submissions across stores, locations, and team counters.
   - Aggregated KPIs: Total Units Counted, Unique SKUs, Active Counters.
   - Multi-store search, location breakdown, and counter breakdown.
-  - **1-Click Export to Excel (`.xlsx`)** formatted with audit columns (including Location) and summary sheet.
+  - *Data extraction is restricted to Admin users.*
+- **Admin Management Portal (Admin Only)**:
+  - **Upload Item Masterlist**:
+    - Upload product catalog via `.xlsx`, `.xls`, or `.csv` with flexible header mapping.
+    - Real-time row parsing, error detection, preview table, and Merge vs. Replace modes.
+    - 1-Click sample Excel & CSV template downloads.
+  - **Extract Counted Items**:
+    - Multi-sheet Excel (`.xlsx`) export: Detailed physical counts, Masterlist reconciliation with variance (+/-), and store/location summaries.
+    - Raw CSV export for ERP/WMS systems (SAP, Oracle, NetSuite).
+    - Extraction filters: Store, Location, and Date Range.
 
 ---
 
 ## 2. Authentication & Demo Accounts
 
-The app supports Email/Password authentication with Firebase Auth. Two quick demo accounts are provided for instant testing:
+The app supports Email/Password and Google authentication with role-based access control (RBAC). Three quick demo accounts are provided for instant testing:
 
-| Role | Username / Email | Password | Assigned Store |
-| :--- | :--- | :--- | :--- |
-| **Counter Associate** | `counter1@retailstore.com` | `Store123!` | Downtown Flagship (`ST-101`) |
-| **Store Supervisor** | `supervisor@retailstore.com` | `Supervisor123!` | Downtown Flagship (`ST-101`) |
+| Role | Username / Email | Password | Assigned Store | Privileges |
+| :--- | :--- | :--- | :--- | :--- |
+| **Counter Associate** | `counter1@retailstore.com` | `Store123!` | Downtown Flagship (`ST-101`) | Barcode scanning, physical counts, local history |
+| **Store Supervisor** | `supervisor@retailstore.com` | `Supervisor123!` | Downtown Flagship (`ST-101`) | Store count oversight, team breakdowns, audit trail |
+| **System Administrator** | `admin@retailstore.com` | `Admin123!` | Downtown Flagship (`ST-101`) | Masterlist upload, catalog control, full count data extraction |
 
-*Users can also create new accounts with their custom display name and default store.*
+*Users can also create new accounts with custom roles and default stores, or sign in with Google (`jetgonzalgo@gmail.com`).*
 
 ---
 

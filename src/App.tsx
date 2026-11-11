@@ -17,6 +17,7 @@ import { CountScreen } from './components/CountScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { SupervisorScreen } from './components/SupervisorScreen';
 import { CatalogScreen } from './components/CatalogScreen';
+import { AdminScreen } from './components/AdminScreen';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { DeploymentGuideModal } from './components/DeploymentGuideModal';
 import { Barcode, HelpCircle } from 'lucide-react';
@@ -27,6 +28,7 @@ export default function App() {
   const [activeStore, setActiveStore] = useState<Store>(getStoredActiveStore());
   const [stores, setStores] = useState<Store[]>(DEFAULT_STORES);
   const [counts, setCounts] = useState<InventoryCount[]>([]);
+  const [catalog, setCatalog] = useState<Product[]>([]);
   const [activeTab, setActiveTab] = useState<ActiveTab>('count');
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState<boolean>(false);
@@ -36,11 +38,21 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
         const storedStore = getStoredActiveStore();
+        const isUserAdmin =
+          firebaseUser.email?.toLowerCase() === 'jetgonzalgo@gmail.com' ||
+          firebaseUser.email?.toLowerCase().includes('admin');
+        const isUserSupervisor = firebaseUser.email?.toLowerCase().includes('supervisor');
+        const resolvedRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
+          ? 'admin'
+          : isUserSupervisor
+          ? 'supervisor'
+          : 'counter';
+
         setCurrentUser({
           uid: firebaseUser.uid,
           email: firebaseUser.email || '',
-          displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Store Associate',
-          role: firebaseUser.email?.includes('supervisor') ? 'supervisor' : 'counter',
+          displayName: firebaseUser.displayName || (isUserAdmin ? 'Jet Gonzalgo' : firebaseUser.email?.split('@')[0]) || 'Store Associate',
+          role: resolvedRole,
           activeStoreId: storedStore.storeId,
         });
       } else {
@@ -74,7 +86,9 @@ export default function App() {
         setCounts(fetchedCounts);
       });
 
-      fetchCatalog();
+      fetchCatalog().then((fetchedCatalog) => {
+        setCatalog(fetchedCatalog);
+      });
 
       const unsubSync = subscribeToSyncStatus((status) => {
         setPendingSyncCount(status.pendingCount);
@@ -168,6 +182,17 @@ export default function App() {
           <SupervisorScreen
             counts={counts}
             stores={stores}
+            currentUser={currentUser}
+          />
+        )}
+
+        {activeTab === 'admin' && (
+          <AdminScreen
+            currentUser={currentUser}
+            counts={counts}
+            stores={stores}
+            catalog={catalog}
+            onCatalogUpdated={() => fetchCatalog().then(setCatalog)}
           />
         )}
 
@@ -195,6 +220,7 @@ export default function App() {
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         pendingSyncCount={pendingSyncCount}
+        currentUser={currentUser}
       />
 
       {/* Deployment & Architecture Modal */}

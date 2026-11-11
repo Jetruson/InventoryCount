@@ -140,7 +140,8 @@
         },
         "role": {
           "type": "string",
-          "description": "User role: counter or supervisor"
+          "enum": ["counter", "supervisor", "admin"],
+          "description": "User role: counter, supervisor, or admin"
         },
         "defaultStore": {
           "type": "string",

@@ -1,6 +1,6 @@
-import { Product } from '../types/inventory';
-import { db, handleFirestoreError, OperationType } from '../firebase/config';
-import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
+import { Product, MasterlistItem } from '../types/inventory';
+import { db } from '../firebase/config';
+import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 export const SEED_PRODUCTS: Product[] = [
   {
@@ -200,4 +200,102 @@ export function findProductByCode(code: string, catalog: Product[]): Product | n
     p.sku.toLowerCase().includes(cleanCode)
   );
   return partial || null;
+}
+
+/**
+ * Bulk imports an item masterlist into local cache and Firestore.
+ * Supports 'merge' (upserts products) or 'replace' (replaces entire catalog).
+ */
+export async function bulkImportMasterlist(
+  items: MasterlistItem[],
+  mode: 'merge' | 'replace' = 'merge'
+): Promise<{ successCount: number; errorCount: number }> {
+  if (!items || items.length === 0) {
+    return { successCount: 0, errorCount: 0 };
+  }
+
+  const existing = mode === 'replace' ? [] : getLocalCatalog();
+  const productMap = new Map<string, Product>();
+
+  // If merging, seed the map with existing items
+  if (mode === 'merge') {
+    existing.forEach((p) => productMap.set(p.sku.toLowerCase(), p));
+  }
+
+  let successCount = 0;
+  let errorCount = 0;
+
+  const newProductsList: Product[] = [];
+
+  for (const item of items) {
+    const sku = (item.sku || '').trim();
+    const barcode = (item.barcode || '').trim();
+    const description = (item.description || '').trim();
+
+    if (!sku || !barcode || !description) {
+      errorCount++;
+      continue;
+    }
+
+    const docId = `prod-${sku.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase()}`;
+    const product: Product = {
+      id: docId,
+      sku,
+      barcode,
+      description,
+      category: (item.category || 'General').trim(),
+      unit: (item.unit || 'pcs').trim(),
+      systemStock: typeof item.systemStock === 'number' && !isNaN(item.systemStock) ? item.systemStock : 0,
+    };
+
+    productMap.set(sku.toLowerCase(), product);
+    newProductsList.push(product);
+    successCount++;
+  }
+
+  const finalCatalog = Array.from(productMap.values());
+  saveLocalCatalog(finalCatalog);
+
+  // Sync to Firestore in background
+  try {
+    for (const prod of newProductsList) {
+      setDoc(doc(db, 'products', prod.id), {
+        sku: prod.sku,
+        barcode: prod.barcode,
+        description: prod.description,
+        category: prod.category,
+        unit: prod.unit,
+        systemStock: prod.systemStock,
+        updatedAt: new Date().toISOString(),
+      }).catch((err) => {
+        console.warn(`Firestore sync note for product ${prod.sku}:`, err.message);
+      });
+    }
+  } catch (err) {
+    console.warn('Firestore bulk sync queued in local cache:', err);
+  }
+
+  return { successCount, errorCount };
+}
+
+/**
+ * Deletes a single product from the local cache and Firestore.
+ */
+export async function deleteProductFromCatalog(productId: string): Promise<void> {
+  const current = getLocalCatalog();
+  const filtered = current.filter((p) => p.id !== productId);
+  saveLocalCatalog(filtered);
+
+  try {
+    await deleteDoc(doc(db, 'products', productId));
+  } catch (e) {
+    console.warn('Failed to delete product from Firestore:', e);
+  }
+}
+
+/**
+ * Clears the catalog from local cache and resets with seed or empty
+ */
+export async function clearAllProducts(): Promise<void> {
+  saveLocalCatalog([]);
 }

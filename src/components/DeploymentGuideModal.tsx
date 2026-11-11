@@ -84,8 +84,9 @@ export const DeploymentGuideModal: React.FC<DeploymentGuideModalProps> = ({ isOp
             </p>
             <ul className="list-disc pl-5 space-y-1 text-slate-400">
               <li><strong className="text-slate-200">Counter Role</strong>: Scans barcodes, records physical stock counts, and accesses personal history.</li>
-              <li><strong className="text-slate-200">Supervisor Role</strong>: Accesses all store submissions, user breakdowns, and Excel data export.</li>
-              <li><strong className="text-slate-200">Hardened Rules</strong>: ABAC rules in <code className="text-emerald-400">firestore.rules</code> enforce user identity, schema validation, and quantity bounds (&ge; 0).</li>
+              <li><strong className="text-slate-200">Supervisor Role</strong>: Accesses store submissions, team counter breakdowns, and auditing metrics (extraction restricted to Admin).</li>
+              <li><strong className="text-purple-300">Admin Role</strong>: Restricted console for uploading item masterlists (.xlsx/.csv), catalog management, and full count extraction with variance reconciliation reports.</li>
+              <li><strong className="text-slate-200">Hardened Rules</strong>: ABAC rules in <code className="text-emerald-400">firestore.rules</code> enforce user identity, admin authorization, schema validation, and quantity bounds (&ge; 0).</li>
             </ul>
           </section>
 

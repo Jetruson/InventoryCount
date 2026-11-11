@@ -1,12 +1,13 @@
-import React from 'react';
-import { Camera, Clock, ShieldCheck, Package } from 'lucide-react';
+import { Camera, Clock, ShieldCheck, Package, ShieldAlert } from 'lucide-react';
+import { AppUser } from '../types/inventory';
 
-export type ActiveTab = 'count' | 'history' | 'supervisor' | 'catalog';
+export type ActiveTab = 'count' | 'history' | 'supervisor' | 'catalog' | 'admin';
 
 interface BottomNavProps {
   activeTab: ActiveTab;
   onChangeTab: (tab: ActiveTab) => void;
   pendingSyncCount?: number;
+  currentUser?: AppUser | null;
 }
 
 interface TabItem {
@@ -20,18 +21,33 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   activeTab,
   onChangeTab,
   pendingSyncCount = 0,
+  currentUser,
 }) => {
-  const tabs: TabItem[] = [
+  const role = currentUser?.role || 'counter';
+
+  const allTabs: TabItem[] = [
     { id: 'count', label: 'Count', icon: Camera },
     { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
-    { id: 'supervisor', label: 'Supervisor', icon: ShieldCheck },
+    ...(role === 'supervisor' || role === 'admin'
+      ? [{ id: 'supervisor' as ActiveTab, label: 'Supervisor', icon: ShieldCheck }]
+      : []),
+    ...(role === 'admin'
+      ? [{ id: 'admin' as ActiveTab, label: 'Admin', icon: ShieldAlert }]
+      : []),
     { id: 'catalog', label: 'Catalog', icon: Package },
   ];
 
+  const gridColsClass =
+    allTabs.length === 5
+      ? 'grid-cols-5'
+      : allTabs.length === 4
+      ? 'grid-cols-4'
+      : 'grid-cols-3';
+
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 pb-safe">
-      <div className="max-w-md mx-auto grid grid-cols-4 h-16 items-center px-1">
-        {tabs.map((tab) => {
+      <div className={`max-w-md mx-auto grid ${gridColsClass} h-16 items-center px-1`}>
+        {allTabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
 
@@ -40,7 +56,11 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               key={tab.id}
               onClick={() => onChangeTab(tab.id as ActiveTab)}
               className={`relative flex flex-col items-center justify-center h-full min-h-[48px] py-1 transition-all active:scale-95 ${
-                isActive ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+                isActive
+                  ? tab.id === 'admin'
+                    ? 'text-purple-400 font-bold'
+                    : 'text-emerald-400 font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <div className="relative">
@@ -55,7 +75,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
                 {tab.label}
               </span>
               {isActive && (
-                <span className="absolute bottom-1 w-6 h-0.5 rounded-full bg-emerald-400" />
+                <span className={`absolute bottom-1 w-6 h-0.5 rounded-full ${tab.id === 'admin' ? 'bg-purple-400' : 'bg-emerald-400'}`} />
               )}
             </button>
           );

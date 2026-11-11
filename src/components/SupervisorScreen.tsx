@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { InventoryCount, Store } from '../types/inventory';
+import { InventoryCount, Store, AppUser } from '../types/inventory';
 import * as XLSX from 'xlsx';
 import {
   FileSpreadsheet,
@@ -14,14 +14,16 @@ import {
   Layers,
   ArrowDownToLine,
   MapPin,
+  Lock,
 } from 'lucide-react';
 
 interface SupervisorScreenProps {
   counts: InventoryCount[];
   stores: Store[];
+  currentUser?: AppUser;
 }
 
-export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stores }) => {
+export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stores, currentUser }) => {
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [selectedUser, setSelectedUser] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -236,14 +238,21 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
           </h2>
         </div>
 
-        <button
-          onClick={handleExportToExcel}
-          disabled={isExporting || filteredSubmissions.length === 0}
-          className="w-full sm:w-auto h-11 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-bold text-xs text-white shadow-lg active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-50"
-        >
-          <FileSpreadsheet className="w-4 h-4" />
-          <span>{isExporting ? 'Generating Excel...' : 'Export to Excel (.xlsx)'}</span>
-        </button>
+        {currentUser?.role === 'admin' ? (
+          <button
+            onClick={handleExportToExcel}
+            disabled={isExporting || filteredSubmissions.length === 0}
+            className="w-full sm:w-auto h-11 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-bold text-xs text-white shadow-lg active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>{isExporting ? 'Generating Excel...' : 'Export to Excel (.xlsx)'}</span>
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2 text-xs text-slate-400">
+            <Lock className="w-3.5 h-3.5 text-slate-500" />
+            <span>Count extraction restricted to Administrator</span>
+          </div>
+        )}
       </div>
 
       {/* KPI Stats Grid */}

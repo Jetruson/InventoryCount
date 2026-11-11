@@ -16,6 +16,14 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'jetgonzalgo@gmail.com' ||
+        (request.auth.token.email is string && request.auth.token.email.matches('(?i).*admin.*')) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -42,17 +50,18 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidCount(request.resource.data);
       allow update: if isSignedIn() && (
+        isAdmin() ||
         resource.data.userId == request.auth.uid ||
         request.resource.data.userId == resource.data.userId
       ) && request.resource.data.countedQuantity >= 0;
-      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid);
+      allow delete: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
     }
 
     // Products Master Catalog
     match /products/{productId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidProduct(request.resource.data);
-      allow delete: if isSignedIn();
+      allow create, update: if isSignedIn() && (isAdmin() || isValidProduct(request.resource.data));
+      allow delete: if isSignedIn() && (isAdmin() || request.auth != null);
     }
 
     // Retail Stores
@@ -64,7 +73,7 @@ service cloud.firestore {
     // User Profiles
     match /users/{userId} {
       allow read: if isSignedIn();
-      allow write: if isOwner(userId);
+      allow write: if isOwner(userId) || isAdmin();
     }
   }
 }
