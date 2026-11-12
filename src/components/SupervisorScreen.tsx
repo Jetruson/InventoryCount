@@ -24,17 +24,35 @@ interface SupervisorScreenProps {
 }
 
 export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stores, currentUser }) => {
+  const isSupervisor = currentUser?.role === 'supervisor';
+  const assignedStoreId = currentUser?.assignedStoreId || currentUser?.activeStoreId;
+  const assignedStore = useMemo(() => {
+    return stores.find((s) => s.storeId === assignedStoreId) || stores[0];
+  }, [stores, assignedStoreId]);
+
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [selectedUser, setSelectedUser] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'all' | 'by_user' | 'by_store' | 'by_location'>('all');
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
+  // Scoped dataset: supervisor ONLY sees counts from their assigned store
+  const scopedCounts = useMemo(() => {
+    if (isSupervisor && assignedStore) {
+      return counts.filter(
+        (c) =>
+          c.storeId === assignedStore.storeId ||
+          c.store.toLowerCase() === assignedStore.name.toLowerCase()
+      );
+    }
+    return counts;
+  }, [counts, isSupervisor, assignedStore]);
+
   // Filtered dataset
   const filteredSubmissions = useMemo(() => {
-    return counts.filter((c) => {
-      // Store filter
-      if (selectedStore !== 'all') {
+    return scopedCounts.filter((c) => {
+      // Store filter (only active if admin)
+      if (!isSupervisor && selectedStore !== 'all') {
         const matchesStore = c.storeId === selectedStore || c.store.toLowerCase().includes(selectedStore.toLowerCase());
         if (!matchesStore) return false;
       }
@@ -57,16 +75,16 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
 
       return true;
     });
-  }, [counts, selectedStore, selectedUser, searchQuery]);
+  }, [scopedCounts, isSupervisor, selectedStore, selectedUser, searchQuery]);
 
   // Unique users list
   const userList = useMemo(() => {
     const set = new Set<string>();
-    counts.forEach((c) => {
+    scopedCounts.forEach((c) => {
       if (c.username) set.add(c.username);
     });
     return Array.from(set);
-  }, [counts]);
+  }, [scopedCounts]);
 
   // Aggregated KPI metrics
   const metrics = useMemo(() => {
@@ -230,12 +248,24 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
       {/* Top Banner with Export Button */}
       <div className="rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-slate-800 p-4 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
-          <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider">
-            Supervisor Management
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`text-xs font-bold uppercase tracking-wider ${isSupervisor ? 'text-amber-400' : 'text-emerald-400'}`}>
+              Supervisor Management
+            </span>
+            {isSupervisor && (
+              <span className="rounded-md bg-amber-500/20 text-amber-300 px-2 py-0.5 text-[10px] font-black uppercase">
+                Assigned Store Scope
+              </span>
+            )}
+          </div>
           <h2 className="text-lg font-black text-white mt-0.5">
-            Store Count Oversight & Audit
+            {isSupervisor ? `${assignedStore?.name} (${assignedStore?.storeId})` : 'Store Count Oversight & Audit (All Branches)'}
           </h2>
+          {isSupervisor && (
+            <p className="text-xs text-slate-400 mt-0.5">
+              Supervisors only have visibility into their designated store branch
+            </p>
+          )}
         </div>
 
         {currentUser?.role === 'admin' ? (
@@ -289,20 +319,32 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
           {/* Store Filter */}
           <div>
             <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-              Filter by Store
+              Store Scope
             </label>
-            <select
-              value={selectedStore}
-              onChange={(e) => setSelectedStore(e.target.value)}
-              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
-            >
-              <option value="all">All Retail Stores</option>
-              {stores.map((s) => (
-                <option key={s.storeId} value={s.storeId}>
-                  {s.name} ({s.storeId})
-                </option>
-              ))}
-            </select>
+            {isSupervisor ? (
+              <div className="w-full flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 font-semibold shadow-xs">
+                <div className="flex items-center gap-1.5 truncate">
+                  <Building2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate">{assignedStore?.name} ({assignedStore?.storeId})</span>
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 shrink-0 ml-1">
+                  Assigned
+                </span>
+              </div>
+            ) : (
+              <select
+                value={selectedStore}
+                onChange={(e) => setSelectedStore(e.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-emerald-500 focus:outline-none"
+              >
+                <option value="all">All Retail Stores</option>
+                {stores.map((s) => (
+                  <option key={s.storeId} value={s.storeId}>
+                    {s.name} ({s.storeId})
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* User Filter */}

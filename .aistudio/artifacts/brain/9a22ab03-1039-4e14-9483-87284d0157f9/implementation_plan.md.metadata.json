@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for 'Inventory Count', an Android-optimized retail Progressive Web App (PWA). Includes barcode scanning (html5-qrcode), manual SKU entry, catalog lookup with dynamic additions, offline-first queue syncing to Firestore, store switching, history filtering, supervisor analytics dashboard, Excel export, and PWA install prompts.",
-  "updatedAt":  "2026-11-11T02:24:13.902248588Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

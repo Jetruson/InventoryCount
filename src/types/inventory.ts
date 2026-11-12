@@ -38,6 +38,21 @@ export interface AppUser {
   displayName: string;
   role: 'counter' | 'supervisor' | 'admin';
   activeStoreId?: string;
+  assignedStoreId?: string; // For supervisors and counters (strictly locked to this store)
+  assignedStoreName?: string;
+}
+
+export interface ManagedUser {
+  id: string; // unique ID
+  username: string; // username or login email
+  displayName: string;
+  password?: string; // access code or password
+  role: 'counter' | 'supervisor' | 'admin';
+  assignedStoreId: string;
+  assignedStoreName: string;
+  createdAt: string;
+  createdBy?: string;
+  isActive: boolean;
 }
 
 export interface MasterlistItem {

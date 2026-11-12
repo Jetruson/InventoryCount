@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Product, Store, InventoryCount } from '../types/inventory';
+import { Product, Store, InventoryCount, AppUser } from '../types/inventory';
 import { findProductByCode, getLocalCatalog } from '../services/catalogService';
 import { recordCount } from '../services/offlineSyncService';
 import { BarcodeScanner } from './BarcodeScanner';
@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 
 interface CountScreenProps {
-  currentUser: { displayName: string; uid: string };
+  currentUser: AppUser;
   activeStore: Store;
   onCountSaved: (savedCount: InventoryCount) => void;
 }
@@ -263,13 +263,19 @@ export const CountScreen: React.FC<CountScreenProps> = ({
             <span className="leading-relaxed font-medium">{validationError}</span>
           </div>
           {barcodeInput && !selectedProduct && (
-            <button
-              onClick={() => setIsAddModalOpen(true)}
-              className="mt-1 self-start flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-500"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Register "{barcodeInput}" to Catalog</span>
-            </button>
+            currentUser.role !== 'counter' ? (
+              <button
+                onClick={() => setIsAddModalOpen(true)}
+                className="mt-1 self-start flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-500 active:scale-95 transition"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Register "{barcodeInput}" to Catalog</span>
+              </button>
+            ) : (
+              <div className="mt-1 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2 font-medium">
+                ⚠️ Unlisted Barcode: Counters cannot register new SKUs. Please provide this barcode to your Supervisor or Administrator to add to the Masterlist.
+              </div>
+            )
           )}
         </div>
       )}
@@ -340,9 +346,9 @@ export const CountScreen: React.FC<CountScreenProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 font-mono text-xs font-bold text-emerald-400">
-                  {selectedProduct.sku}
+                  Item No: {selectedProduct.sku}
                 </span>
-                <span className="text-xs text-slate-400">· {selectedProduct.category}</span>
+                <span className="text-xs text-slate-400">· Group: {selectedProduct.category || 'General'}</span>
               </div>
               <h2 className="mt-1.5 text-base font-bold text-white leading-snug">
                 {selectedProduct.description}
@@ -358,12 +364,12 @@ export const CountScreen: React.FC<CountScreenProps> = ({
 
           <div className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-800/80 pt-2.5 text-xs">
             <div>
-              <span className="text-slate-400">Barcode:</span>{' '}
-              <span className="font-mono text-slate-200">{selectedProduct.barcode}</span>
+              <span className="text-slate-400">Barcode / Code:</span>{' '}
+              <span className="font-mono text-slate-200">{selectedProduct.barcode || selectedProduct.sku}</span>
             </div>
             <div>
-              <span className="text-slate-400">Unit:</span>{' '}
-              <span className="font-medium text-slate-200">{selectedProduct.unit}</span>
+              <span className="text-slate-400">UoM:</span>{' '}
+              <span className="font-medium text-slate-200">{selectedProduct.unit || 'pcs'}</span>
             </div>
           </div>
         </div>

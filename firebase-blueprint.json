@@ -149,6 +149,52 @@
         }
       },
       "required": ["username", "email"]
+    },
+    "ManagedUser": {
+      "title": "ManagedUser",
+      "description": "User provisioned and assigned to a retail store by Administrator",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Managed user identifier"
+        },
+        "username": {
+          "type": "string",
+          "description": "Username or login handle"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Full display name"
+        },
+        "password": {
+          "type": "string",
+          "description": "User access credentials"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["counter", "supervisor", "admin"],
+          "description": "Assigned role"
+        },
+        "assignedStoreId": {
+          "type": "string",
+          "description": "Designated retail store identifier"
+        },
+        "assignedStoreName": {
+          "type": "string",
+          "description": "Designated retail store branch name"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether user is active"
+        }
+      },
+      "required": ["username", "displayName", "role", "assignedStoreId", "assignedStoreName"]
     }
   },
   "firestore": {
@@ -175,6 +221,12 @@
         "$ref": "#/entities/UserProfile"
       },
       "description": "Registered app users and counter profiles"
+    },
+    "/managed_users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/ManagedUser"
+      },
+      "description": "Admin provisioned user accounts with designated store assignments"
     }
   }
 }

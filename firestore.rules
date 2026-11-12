@@ -75,5 +75,11 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow write: if isOwner(userId) || isAdmin();
     }
+
+    // Managed Users (Created and Assigned by Admin)
+    match /managed_users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
   }
 }

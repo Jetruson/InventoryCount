@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { Product } from '../types/inventory';
+import { Product, AppUser } from '../types/inventory';
 import { fetchCatalog, getLocalCatalog } from '../services/catalogService';
 import { AddProductModal } from './AddProductModal';
-import { Package, Search, Plus, Barcode, Tag, Sparkles } from 'lucide-react';
+import { Package, Search, Plus, Barcode, Tag, Sparkles, ShieldAlert } from 'lucide-react';
 
 interface CatalogScreenProps {
+  currentUser?: AppUser;
   onSelectProductForCount?: (product: Product) => void;
 }
 
-export const CatalogScreen: React.FC<CatalogScreenProps> = ({ onSelectProductForCount }) => {
+export const CatalogScreen: React.FC<CatalogScreenProps> = ({ currentUser, onSelectProductForCount }) => {
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const canAddSku = currentUser?.role === 'supervisor' || currentUser?.role === 'admin';
 
   useEffect(() => {
     // Initial local read
@@ -46,13 +48,20 @@ export const CatalogScreen: React.FC<CatalogScreenProps> = ({ onSelectProductFor
           <span className="text-xs text-slate-400 font-medium">Product Master Catalog</span>
           <h2 className="text-lg font-black text-white">{filteredProducts.length} Items Listed</h2>
         </div>
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="h-10 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-bold text-xs text-white shadow-md active:scale-95 transition flex items-center gap-1.5"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add SKU</span>
-        </button>
+        {canAddSku ? (
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="h-10 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-bold text-xs text-white shadow-md active:scale-95 transition flex items-center gap-1.5"
+            title="Register New SKU to Masterlist"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add SKU</span>
+          </button>
+        ) : (
+          <div className="text-[11px] text-slate-400 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60 font-medium">
+            View-Only Catalog (Counter)
+          </div>
+        )}
       </div>
 
       {/* Search & Filter */}
@@ -106,17 +115,22 @@ export const CatalogScreen: React.FC<CatalogScreenProps> = ({ onSelectProductFor
             <div>
               <div className="flex items-center justify-between">
                 <span className="rounded-md bg-emerald-500/15 text-emerald-400 px-2 py-0.5 font-mono text-xs font-bold">
-                  {p.sku}
+                  Item No: {p.sku}
                 </span>
-                <span className="text-[11px] text-slate-400">{p.category}</span>
+                <span className="text-[11px] text-slate-400 font-medium">{p.category || 'General'}</span>
               </div>
               <h3 className="mt-2 text-sm font-bold text-white leading-snug">{p.description}</h3>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <span className="bg-slate-800/80 border border-slate-700/60 px-2 py-0.5 rounded text-slate-300 font-mono text-[10px]">
+                  UoM: {p.unit || 'pcs'}
+                </span>
+              </div>
             </div>
 
             <div className="border-t border-slate-800 pt-2.5 flex items-center justify-between text-xs">
               <div className="flex items-center gap-1.5 text-slate-400 font-mono">
                 <Barcode className="w-3.5 h-3.5 text-slate-500" />
-                <span>{p.barcode}</span>
+                <span>{p.barcode || p.sku}</span>
               </div>
 
               {onSelectProductForCount && (
@@ -132,13 +146,15 @@ export const CatalogScreen: React.FC<CatalogScreenProps> = ({ onSelectProductFor
         ))}
       </div>
 
-      <AddProductModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onProductAdded={(newProd) => {
-          setProducts((prev) => [newProd, ...prev]);
-        }}
-      />
+      {canAddSku && (
+        <AddProductModal
+          isOpen={isAddModalOpen}
+          onClose={() => setIsAddModalOpen(false)}
+          onProductAdded={(newProd) => {
+            setProducts((prev) => [newProd, ...prev]);
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -7,7 +7,15 @@ import React, { useState, useEffect } from 'react';
 import { auth } from './firebase/config';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { AppUser, Store, InventoryCount, Product } from './types/inventory';
-import { DEFAULT_STORES, getStoredActiveStore, setStoredActiveStore, fetchStores, seedStoresIfEmpty } from './services/storeService';
+import {
+  DEFAULT_STORES,
+  getLocalStores,
+  getStoredActiveStore,
+  setStoredActiveStore,
+  fetchStores,
+  seedStoresIfEmpty,
+} from './services/storeService';
+import { seedUsersIfEmpty } from './services/userService';
 import { fetchAllCounts, subscribeToSyncStatus } from './services/offlineSyncService';
 import { fetchCatalog } from './services/catalogService';
 import { AuthScreen } from './components/AuthScreen';
@@ -26,7 +34,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
   const [activeStore, setActiveStore] = useState<Store>(getStoredActiveStore());
-  const [stores, setStores] = useState<Store[]>(DEFAULT_STORES);
+  const [stores, setStores] = useState<Store[]>(getLocalStores());
   const [counts, setCounts] = useState<InventoryCount[]>([]);
   const [catalog, setCatalog] = useState<Product[]>([]);
   const [activeTab, setActiveTab] = useState<ActiveTab>('count');
@@ -48,19 +56,59 @@ export default function App() {
           ? 'supervisor'
           : 'counter';
 
-        setCurrentUser({
+        // Check local session storage for supervisor assignment metadata
+        let assignedStoreId: string | undefined = undefined;
+        let assignedStoreName: string | undefined = undefined;
+        try {
+          const localSession = localStorage.getItem('inventory_count_session_user');
+          if (localSession) {
+            const parsed = JSON.parse(localSession);
+            assignedStoreId = parsed.assignedStoreId;
+            assignedStoreName = parsed.assignedStoreName;
+          }
+        } catch {
+          // ignore error
+        }
+
+        const userObj: AppUser = {
           uid: firebaseUser.uid,
           email: firebaseUser.email || '',
-          displayName: firebaseUser.displayName || (isUserAdmin ? 'Jet Gonzalgo' : firebaseUser.email?.split('@')[0]) || 'Store Associate',
+          displayName:
+            firebaseUser.displayName ||
+            (isUserAdmin ? 'Jet Gonzalgo' : firebaseUser.email?.split('@')[0]) ||
+            'Store Associate',
           role: resolvedRole,
-          activeStoreId: storedStore.storeId,
-        });
+          activeStoreId: assignedStoreId || storedStore.storeId,
+          assignedStoreId: assignedStoreId,
+          assignedStoreName: assignedStoreName,
+        };
+
+        setCurrentUser(userObj);
+
+        // Lock supervisor immediately to their assigned store
+        if (resolvedRole === 'supervisor' && assignedStoreId) {
+          const currentStores = getLocalStores();
+          const matched = currentStores.find((s) => s.storeId === assignedStoreId);
+          if (matched) {
+            setActiveStore(matched);
+            setStoredActiveStore(matched);
+          }
+        }
       } else {
         // Check if there is an active local session
         try {
           const localSession = localStorage.getItem('inventory_count_session_user');
           if (localSession) {
-            setCurrentUser(JSON.parse(localSession));
+            const parsed: AppUser = JSON.parse(localSession);
+            setCurrentUser(parsed);
+            if (parsed.role === 'supervisor' && parsed.assignedStoreId) {
+              const currentStores = getLocalStores();
+              const matched = currentStores.find((s) => s.storeId === parsed.assignedStoreId);
+              if (matched) {
+                setActiveStore(matched);
+                setStoredActiveStore(matched);
+              }
+            }
           } else {
             setCurrentUser(null);
           }
@@ -78,8 +126,16 @@ export default function App() {
   useEffect(() => {
     if (currentUser) {
       seedStoresIfEmpty();
+      seedUsersIfEmpty();
       fetchStores().then((fetchedStores) => {
         setStores(fetchedStores);
+        if (currentUser.role !== 'admin' && currentUser.assignedStoreId) {
+          const matched = fetchedStores.find((s) => s.storeId === currentUser.assignedStoreId);
+          if (matched) {
+            setActiveStore(matched);
+            setStoredActiveStore(matched);
+          }
+        }
       });
 
       fetchAllCounts().then((fetchedCounts) => {
@@ -103,6 +159,10 @@ export default function App() {
   }, [currentUser]);
 
   const handleSelectStore = (store: Store) => {
+    // Only administrators can switch stores. Counters and supervisors are locked to their assigned store.
+    if (currentUser?.role !== 'admin') {
+      return;
+    }
     setActiveStore(store);
     setStoredActiveStore(store);
   };
@@ -135,13 +195,15 @@ export default function App() {
     );
   }
 
-  // If not logged in, render the Auth Screen
+  // If not logged in, render the Auth Screen with dynamically available stores
   if (!currentUser) {
     return (
       <AuthScreen
+        stores={stores}
         onLoginSuccess={(user, selectedStore) => {
           setCurrentUser(user);
           setActiveStore(selectedStore);
+          setStoredActiveStore(selectedStore);
         }}
       />
     );
@@ -175,6 +237,7 @@ export default function App() {
           <HistoryScreen
             counts={counts}
             activeStore={activeStore}
+            currentUser={currentUser}
           />
         )}
 
@@ -193,11 +256,20 @@ export default function App() {
             stores={stores}
             catalog={catalog}
             onCatalogUpdated={() => fetchCatalog().then(setCatalog)}
+            onStoresUpdated={(updatedStores) => {
+              setStores(updatedStores);
+              // If current active store was deleted, fall back to first store
+              if (!updatedStores.some((s) => s.storeId === activeStore.storeId) && updatedStores.length > 0) {
+                setActiveStore(updatedStores[0]);
+                setStoredActiveStore(updatedStores[0]);
+              }
+            }}
           />
         )}
 
         {activeTab === 'catalog' && (
           <CatalogScreen
+            currentUser={currentUser}
             onSelectProductForCount={(prod: Product) => {
               setActiveTab('count');
             }}

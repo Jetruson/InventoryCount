@@ -1,6 +1,6 @@
 import { Store } from '../types/inventory';
-import { db, handleFirestoreError, OperationType } from '../firebase/config';
-import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
+import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 export const DEFAULT_STORES: Store[] = [
   { storeId: 'ST-101', name: 'Downtown Flagship', location: '100 Main Street' },
@@ -11,6 +11,30 @@ export const DEFAULT_STORES: Store[] = [
 ];
 
 const ACTIVE_STORE_KEY = 'inventory_count_active_store';
+const LOCAL_STORES_KEY = 'inventory_count_local_stores';
+
+export function getLocalStores(): Store[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Error reading local stores cache:', e);
+  }
+  return DEFAULT_STORES;
+}
+
+export function saveLocalStores(stores: Store[]): void {
+  try {
+    localStorage.setItem(LOCAL_STORES_KEY, JSON.stringify(stores));
+  } catch (e) {
+    console.warn('Error saving local stores cache:', e);
+  }
+}
 
 export function getStoredActiveStore(): Store {
   try {
@@ -21,7 +45,8 @@ export function getStoredActiveStore(): Store {
   } catch (e) {
     console.error('Error reading active store:', e);
   }
-  return DEFAULT_STORES[0];
+  const currentStores = getLocalStores();
+  return currentStores[0] || DEFAULT_STORES[0];
 }
 
 export function setStoredActiveStore(store: Store): void {
@@ -45,12 +70,13 @@ export async function fetchStores(): Promise<Store[]> {
           location: data.location || '',
         });
       });
+      saveLocalStores(stores);
       return stores;
     }
   } catch (e) {
-    console.warn('Using default preloaded stores list:', e);
+    console.warn('Network offline or error fetching stores from Firestore. Using local stores cache:', e);
   }
-  return DEFAULT_STORES;
+  return getLocalStores();
 }
 
 export async function seedStoresIfEmpty(): Promise<void> {
@@ -62,7 +88,89 @@ export async function seedStoresIfEmpty(): Promise<void> {
       }
     }
   } catch (e) {
-    // Non-fatal if offline or restricted
     console.warn('Store seeding skipped or offline:', e);
   }
+}
+
+/**
+ * Admin action: Adds a new retail store branch.
+ */
+export async function addStore(newStore: Store): Promise<Store[]> {
+  const currentStores = getLocalStores();
+  // Check for duplicate ID
+  const existingIdx = currentStores.findIndex(s => s.storeId.toLowerCase() === newStore.storeId.toLowerCase());
+  let updatedStores: Store[];
+  if (existingIdx >= 0) {
+    updatedStores = currentStores.map(s => s.storeId.toLowerCase() === newStore.storeId.toLowerCase() ? newStore : s);
+  } else {
+    updatedStores = [...currentStores, newStore];
+  }
+
+  saveLocalStores(updatedStores);
+
+  try {
+    await setDoc(doc(db, 'stores', newStore.storeId), {
+      storeId: newStore.storeId,
+      name: newStore.name,
+      location: newStore.location || '',
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn('Offline: Store saved locally and will sync when online.', e);
+  }
+
+  return updatedStores;
+}
+
+/**
+ * Admin action: Deletes a retail store branch.
+ */
+export async function deleteStore(storeId: string): Promise<Store[]> {
+  const currentStores = getLocalStores();
+  const updatedStores = currentStores.filter(s => s.storeId !== storeId);
+
+  // If deleted store was the active store, switch active store to first available
+  const activeStore = getStoredActiveStore();
+  if (activeStore.storeId === storeId) {
+    const nextStore = updatedStores[0] || DEFAULT_STORES[0];
+    setStoredActiveStore(nextStore);
+  }
+
+  saveLocalStores(updatedStores);
+
+  try {
+    await deleteDoc(doc(db, 'stores', storeId));
+  } catch (e) {
+    console.warn('Offline: Store deleted locally and will sync when online.', e);
+  }
+
+  return updatedStores;
+}
+
+/**
+ * Admin action: Updates an existing retail store.
+ */
+export async function updateStore(updatedStore: Store): Promise<Store[]> {
+  const currentStores = getLocalStores();
+  const updatedStores = currentStores.map(s => s.storeId === updatedStore.storeId ? updatedStore : s);
+
+  saveLocalStores(updatedStores);
+
+  const activeStore = getStoredActiveStore();
+  if (activeStore.storeId === updatedStore.storeId) {
+    setStoredActiveStore(updatedStore);
+  }
+
+  try {
+    await setDoc(doc(db, 'stores', updatedStore.storeId), {
+      storeId: updatedStore.storeId,
+      name: updatedStore.name,
+      location: updatedStore.location || '',
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+  } catch (e) {
+    console.warn('Offline: Store updated locally and will sync when online.', e);
+  }
+
+  return updatedStores;
 }

@@ -229,7 +229,7 @@ export async function bulkImportMasterlist(
 
   for (const item of items) {
     const sku = (item.sku || '').trim();
-    const barcode = (item.barcode || '').trim();
+    const barcode = (item.barcode || item.sku || '').trim();
     const description = (item.description || '').trim();
 
     if (!sku || !barcode || !description) {

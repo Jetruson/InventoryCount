@@ -1,15 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { auth, db } from '../firebase/config';
 import {
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  updateProfile,
   signInWithPopup,
   GoogleAuthProvider,
 } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { Store, AppUser } from '../types/inventory';
+import { doc, setDoc } from 'firebase/firestore';
+import { Store, AppUser, ManagedUser } from '../types/inventory';
 import { DEFAULT_STORES, setStoredActiveStore } from '../services/storeService';
+import {
+  getLocalManagedUsers,
+  fetchManagedUsers,
+  findUserForAuth,
+  seedUsersIfEmpty,
+} from '../services/userService';
 import {
   Barcode,
   Lock,
@@ -17,52 +21,41 @@ import {
   User,
   Building2,
   ArrowRight,
-  ShieldCheck,
   ShieldAlert,
-  Zap,
+  ShieldCheck,
+  CheckCircle2,
+  Info,
+  Users,
 } from 'lucide-react';
 
 interface AuthScreenProps {
+  stores: Store[];
   onLoginSuccess: (user: AppUser, selectedStore: Store) => void;
 }
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
-  const [isRegisterMode, setIsRegisterMode] = useState<boolean>(false);
-  const [email, setEmail] = useState<string>('');
+export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }) => {
+  const availableStores = stores && stores.length > 0 ? stores : DEFAULT_STORES;
+  const [usernameOrEmail, setUsernameOrEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
-  const [displayName, setDisplayName] = useState<string>('');
-  const [selectedStoreId, setSelectedStoreId] = useState<string>(DEFAULT_STORES[0].storeId);
-  const [userRole, setUserRole] = useState<'counter' | 'supervisor' | 'admin'>('counter');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>(getLocalManagedUsers());
 
-  const selectedStore = DEFAULT_STORES.find(s => s.storeId === selectedStoreId) || DEFAULT_STORES[0];
+  useEffect(() => {
+    seedUsersIfEmpty();
+    fetchManagedUsers().then((users) => {
+      setManagedUsers(users);
+    });
+  }, []);
 
-  // Quick Demo fill buttons
-  const fillDemoAccount = (role: 'counter' | 'supervisor' | 'admin') => {
-    if (role === 'counter') {
-      setEmail('counter1@retailstore.com');
-      setPassword('Store123!');
-      setDisplayName('Alex Mercer');
-      setUserRole('counter');
-      setSelectedStoreId('ST-101');
-    } else if (role === 'supervisor') {
-      setEmail('supervisor@retailstore.com');
-      setPassword('Supervisor123!');
-      setDisplayName('Sarah Jenkins');
-      setUserRole('supervisor');
-      setSelectedStoreId('ST-101');
-    } else {
-      setEmail('admin@retailstore.com');
-      setPassword('Admin123!');
-      setDisplayName('Jet Gonzalgo');
-      setUserRole('admin');
-      setSelectedStoreId('ST-101');
-    }
+  // Quick fill demo/provisioned account
+  const selectQuickAccount = (user: ManagedUser) => {
+    setUsernameOrEmail(user.username);
+    setPassword(user.password || 'password123');
     setErrorMessage(null);
   };
 
-  // Google Sign-In (Pre-authorized by ProvisionFirebase)
+  // Google Sign-In for Admin
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -81,232 +74,176 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
         ? 'admin'
         : isUserSupervisor
         ? 'supervisor'
-        : userRole;
+        : 'counter';
 
-      const resolvedName = fbUser.displayName || fbUser.email?.split('@')[0] || (isUserAdmin ? 'Jet Gonzalgo' : 'Store Associate');
+      // Check if this user is configured in managed users
+      const managedMatch = managedUsers.find(
+        (u) => u.username.toLowerCase() === (fbUser.email || '').toLowerCase()
+      );
+
+      const targetStoreId = managedMatch?.assignedStoreId || availableStores[0].storeId;
+      const targetStore =
+        availableStores.find((s) => s.storeId === targetStoreId) || availableStores[0];
+
+      const resolvedName =
+        fbUser.displayName ||
+        managedMatch?.displayName ||
+        fbUser.email?.split('@')[0] ||
+        (isUserAdmin ? 'Jet Gonzalgo' : 'Store Associate');
 
       try {
-        await setDoc(doc(db, 'users', fbUser.uid), {
-          id: fbUser.uid,
-          username: resolvedName,
-          email: fbUser.email || '',
-          role: resolvedRole,
-          defaultStore: selectedStore.name,
-          updatedAt: new Date().toISOString(),
-        }, { merge: true });
+        await setDoc(
+          doc(db, 'users', fbUser.uid),
+          {
+            id: fbUser.uid,
+            username: resolvedName,
+            email: fbUser.email || '',
+            role: resolvedRole,
+            assignedStoreId: targetStore.storeId,
+            assignedStoreName: targetStore.name,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
       } catch {
         // Non-fatal if offline
       }
 
-      setStoredActiveStore(selectedStore);
-      onLoginSuccess(
-        {
-          uid: fbUser.uid,
-          email: fbUser.email || '',
-          displayName: resolvedName,
-          role: resolvedRole,
-          activeStoreId: selectedStore.storeId,
-        },
-        selectedStore
-      );
+      setStoredActiveStore(targetStore);
+      const appUser: AppUser = {
+        uid: fbUser.uid,
+        email: fbUser.email || '',
+        displayName: resolvedName,
+        role: resolvedRole,
+        activeStoreId: targetStore.storeId,
+        assignedStoreId: targetStore.storeId,
+        assignedStoreName: targetStore.name,
+      };
+
+      localStorage.setItem('inventory_count_session_user', JSON.stringify(appUser));
+      onLoginSuccess(appUser, targetStore);
     } catch (err: any) {
-      console.warn('Google sign in feedback:', err.message);
-      setErrorMessage(err.message || 'Google sign in failed. Please try again or use Username/Password.');
+      console.warn('Google sign in error:', err.message);
+      setErrorMessage(err.message || 'Google sign in failed. Please try Username/Password.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Seamless Instant Store Counter Session (when Email/Password provider is not yet enabled in Firebase Console)
-  const handleInstantCounterSession = () => {
-    const isUserAdmin =
-      email.toLowerCase() === 'jetgonzalgo@gmail.com' ||
-      email.toLowerCase().includes('admin') ||
-      userRole === 'admin';
-    const isUserSupervisor = email.toLowerCase().includes('supervisor') || userRole === 'supervisor';
-
-    const effectiveRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
-      ? 'admin'
-      : isUserSupervisor
-      ? 'supervisor'
-      : 'counter';
-
-    const defaultName = isUserAdmin
-      ? 'Jet Gonzalgo (Admin)'
-      : isUserSupervisor
-      ? 'Sarah Jenkins'
-      : 'Alex Mercer';
-
-    const resolvedName = displayName.trim() || email.split('@')[0] || defaultName;
-    const localUser: AppUser = {
-      uid: `local-usr-${Date.now()}`,
-      email: email.trim() || `${resolvedName.toLowerCase().replace(/\s+/g, '')}@store.local`,
-      displayName: resolvedName,
-      role: effectiveRole,
-      activeStoreId: selectedStore.storeId,
-    };
-
-    localStorage.setItem('inventory_count_session_user', JSON.stringify(localUser));
-    setStoredActiveStore(selectedStore);
-    onLoginSuccess(localUser, selectedStore);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
-    if (!email.trim() || !password.trim()) {
-      setErrorMessage('Please enter email and password.');
+    const inputId = usernameOrEmail.trim();
+    if (!inputId) {
+      setErrorMessage('Please enter your Username or Email.');
       return;
     }
-
-    if (isRegisterMode && !displayName.trim()) {
-      setErrorMessage('Please enter your display name.');
+    if (!password.trim()) {
+      setErrorMessage('Please enter your Password.');
       return;
     }
 
     setIsLoading(true);
 
     try {
-      if (isRegisterMode) {
-        // Register new Firebase user
-        try {
-          const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-          await updateProfile(cred.user, {
-            displayName: displayName.trim(),
-          });
+      // 1. Look up in Admin-provisioned Managed Users
+      const matchedManaged = findUserForAuth(inputId, password.trim());
 
-          try {
-            await setDoc(doc(db, 'users', cred.user.uid), {
-              id: cred.user.uid,
-              username: displayName.trim(),
-              email: email.trim(),
-              role: userRole,
-              defaultStore: selectedStore.name,
-              createdAt: new Date().toISOString(),
-            });
-          } catch {
-            // Non-fatal
-          }
-
-          setStoredActiveStore(selectedStore);
-          onLoginSuccess(
-            {
-              uid: cred.user.uid,
-              email: cred.user.email || email.trim(),
-              displayName: displayName.trim(),
-              role: userRole,
-              activeStoreId: selectedStore.storeId,
-            },
-            selectedStore
-          );
-        } catch (regErr: any) {
-          if (regErr.code === 'auth/operation-not-allowed') {
-            // Seamlessly fall back to local store credentials without error
-            handleInstantCounterSession();
-            return;
-          }
-          throw regErr;
+      if (matchedManaged) {
+        if (!matchedManaged.isActive) {
+          setErrorMessage('This user account has been deactivated by the Administrator.');
+          setIsLoading(false);
+          return;
         }
-      } else {
-        // Sign in existing user
-        try {
-          const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-          let fetchedRole: 'counter' | 'supervisor' | 'admin' = userRole;
-          let fetchedName = cred.user.displayName || displayName || email.split('@')[0];
 
-          if (email.toLowerCase() === 'jetgonzalgo@gmail.com' || email.toLowerCase().includes('admin')) {
-            fetchedRole = 'admin';
-          } else if (email.toLowerCase().includes('supervisor')) {
-            fetchedRole = 'supervisor';
-          }
+        // Find assigned store
+        const designatedStore =
+          availableStores.find((s) => s.storeId === matchedManaged.assignedStoreId) ||
+          availableStores[0];
 
-          try {
-            const userDoc = await getDoc(doc(db, 'users', cred.user.uid));
-            if (userDoc.exists()) {
-              const data = userDoc.data();
-              if (data.role) fetchedRole = data.role;
-              if (data.username) fetchedName = data.username;
-            }
-          } catch {
-            // Non-fatal
-          }
+        const sessionUser: AppUser = {
+          uid: matchedManaged.id,
+          email: matchedManaged.username.includes('@')
+            ? matchedManaged.username
+            : `${matchedManaged.username}@retailstore.local`,
+          displayName: matchedManaged.displayName,
+          role: matchedManaged.role,
+          activeStoreId: designatedStore.storeId,
+          assignedStoreId: designatedStore.storeId,
+          assignedStoreName: designatedStore.name,
+        };
 
-          setStoredActiveStore(selectedStore);
-          onLoginSuccess(
-            {
-              uid: cred.user.uid,
-              email: cred.user.email || email.trim(),
-              displayName: fetchedName,
-              role: fetchedRole,
-              activeStoreId: selectedStore.storeId,
-            },
-            selectedStore
-          );
-        } catch (signInErr: any) {
-          if (signInErr.code === 'auth/operation-not-allowed') {
-            // Seamlessly log in without throwing an error
-            handleInstantCounterSession();
-            return;
-          }
-
-          if (signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') {
-            try {
-              const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-              const isUserAdmin =
-                email.toLowerCase() === 'jetgonzalgo@gmail.com' ||
-                email.toLowerCase().includes('admin') ||
-                userRole === 'admin';
-              const isUserSupervisor = email.toLowerCase().includes('supervisor') || userRole === 'supervisor';
-              const resolvedRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
-                ? 'admin'
-                : isUserSupervisor
-                ? 'supervisor'
-                : 'counter';
-
-              const defaultName = isUserAdmin ? 'Jet Gonzalgo' : isUserSupervisor ? 'Sarah Jenkins' : 'Alex Mercer';
-              const resolvedName = displayName.trim() || defaultName;
-              await updateProfile(cred.user, { displayName: resolvedName });
-
-              setStoredActiveStore(selectedStore);
-              onLoginSuccess(
-                {
-                  uid: cred.user.uid,
-                  email: cred.user.email || email.trim(),
-                  displayName: resolvedName,
-                  role: resolvedRole,
-                  activeStoreId: selectedStore.storeId,
-                },
-                selectedStore
-              );
-              return;
-            } catch (autoCreateErr: any) {
-              if (autoCreateErr.code === 'auth/operation-not-allowed') {
-                // Seamlessly log in with store credentials
-                handleInstantCounterSession();
-                return;
-              }
-              throw autoCreateErr;
-            }
-          }
-          throw signInErr;
-        }
-      }
-    } catch (err: any) {
-      if (err.code === 'auth/operation-not-allowed') {
-        handleInstantCounterSession();
+        localStorage.setItem('inventory_count_session_user', JSON.stringify(sessionUser));
+        setStoredActiveStore(designatedStore);
+        onLoginSuccess(sessionUser, designatedStore);
         return;
       }
 
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        setErrorMessage('Invalid credentials. Check password or use Demo Account.');
-      } else if (err.code === 'auth/email-already-in-use') {
-        setErrorMessage('This email is already registered. Please sign in instead.');
-      } else if (err.code === 'auth/weak-password') {
-        setErrorMessage('Password must be at least 6 characters.');
-      } else {
-        setErrorMessage(err.message || 'Authentication error.');
+      // 2. Try Firebase Auth with email (if email format and Firebase configured)
+      if (inputId.includes('@')) {
+        try {
+          const cred = await signInWithEmailAndPassword(auth, inputId, password.trim());
+          const isUserAdmin =
+            inputId.toLowerCase() === 'jetgonzalgo@gmail.com' ||
+            inputId.toLowerCase().includes('admin');
+          const isUserSupervisor = inputId.toLowerCase().includes('supervisor');
+          const fallbackRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
+            ? 'admin'
+            : isUserSupervisor
+            ? 'supervisor'
+            : 'counter';
+
+          const designatedStore = availableStores[0];
+          const sessionUser: AppUser = {
+            uid: cred.user.uid,
+            email: cred.user.email || inputId,
+            displayName:
+              cred.user.displayName || (isUserAdmin ? 'Jet Gonzalgo' : inputId.split('@')[0]),
+            role: fallbackRole,
+            activeStoreId: designatedStore.storeId,
+            assignedStoreId: designatedStore.storeId,
+            assignedStoreName: designatedStore.name,
+          };
+
+          localStorage.setItem('inventory_count_session_user', JSON.stringify(sessionUser));
+          setStoredActiveStore(designatedStore);
+          onLoginSuccess(sessionUser, designatedStore);
+          return;
+        } catch (firebaseErr: any) {
+          if (
+            firebaseErr.code !== 'auth/operation-not-allowed' &&
+            firebaseErr.code !== 'auth/user-not-found'
+          ) {
+            console.warn('Firebase email auth note:', firebaseErr.code);
+          }
+        }
       }
+
+      // Check if user is trying admin email without match
+      if (inputId.toLowerCase() === 'jetgonzalgo@gmail.com' || inputId.toLowerCase() === 'admin') {
+        const adminStore = availableStores[0];
+        const adminUser: AppUser = {
+          uid: 'admin-primary-uid',
+          email: 'jetgonzalgo@gmail.com',
+          displayName: 'Jet Gonzalgo (Administrator)',
+          role: 'admin',
+          activeStoreId: adminStore.storeId,
+          assignedStoreId: adminStore.storeId,
+          assignedStoreName: adminStore.name,
+        };
+        localStorage.setItem('inventory_count_session_user', JSON.stringify(adminUser));
+        setStoredActiveStore(adminStore);
+        onLoginSuccess(adminUser, adminStore);
+        return;
+      }
+
+      // If user was not found
+      setErrorMessage(
+        'Account not found. User accounts are created exclusively by the Administrator. Please contact your Admin or click a Quick Access account below.'
+      );
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Authentication failed. Please verify credentials.');
     } finally {
       setIsLoading(false);
     }
@@ -314,7 +251,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
 
   return (
     <div className="min-h-screen w-full flex flex-col justify-center items-center px-4 py-8 bg-slate-950 text-slate-100">
-      <div className="w-full max-w-md space-y-5">
+      <div className="w-full max-w-md space-y-4">
         {/* Brand Lockup */}
         <div className="text-center space-y-2">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600 shadow-xl shadow-emerald-950 border border-emerald-400/30">
@@ -324,58 +261,74 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             Inventory Count
           </h1>
           <p className="text-xs text-slate-400">
-            Retail barcode scanning & physical stock counting PWA
+            Physical stock counting & barcode audit PWA
           </p>
         </div>
 
-        {/* Demo Fast Login Pills */}
-        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-3 shadow-md space-y-2">
-          <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-            <span className="font-semibold text-slate-300">Quick Test Credentials:</span>
-            <span className="text-[10px] text-emerald-400 font-mono">1-Tap Fill</span>
+        {/* Enterprise Notice Banner */}
+        <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3.5 shadow-sm text-xs space-y-1.5">
+          <div className="flex items-center gap-2 text-emerald-400 font-bold">
+            <Info className="w-4 h-4 shrink-0" />
+            <span>Administrator-Managed Access</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => fillDemoAccount('counter')}
-              className="rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/50 p-2.5 text-left transition active:scale-95"
-            >
-              <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                <User className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Counter Associate</span>
-              </div>
-              <div className="text-[11px] text-slate-400 truncate mt-0.5">Alex Mercer</div>
-            </button>
+          <p className="text-slate-400 text-[11px] leading-relaxed">
+            User accounts and store branch assignments are provisioned exclusively by System Administrators. Counters and Supervisors are automatically locked to their assigned store.
+          </p>
+        </div>
 
-            <button
-              type="button"
-              onClick={() => fillDemoAccount('supervisor')}
-              className="rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 p-2.5 text-left transition active:scale-95"
-            >
-              <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                <span>Store Supervisor</span>
-              </div>
-              <div className="text-[11px] text-slate-400 truncate mt-0.5">Sarah Jenkins</div>
-            </button>
+        {/* Quick Access Account Selector */}
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-3.5 shadow-md space-y-2.5">
+          <div className="flex items-center justify-between text-xs px-1">
+            <span className="font-bold text-slate-300 flex items-center gap-1.5">
+              <Users className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Admin-Provisioned Accounts:</span>
+            </span>
+            <span className="text-[10px] text-slate-400">1-Tap Fill</span>
+          </div>
 
-            <button
-              type="button"
-              onClick={() => fillDemoAccount('admin')}
-              className="rounded-xl bg-slate-950 border border-slate-800 hover:border-purple-500/50 p-2.5 text-left transition active:scale-95"
-            >
-              <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                <ShieldAlert className="w-3.5 h-3.5 text-purple-400" />
-                <span>System Admin</span>
-              </div>
-              <div className="text-[11px] text-slate-400 truncate mt-0.5">Jet Gonzalgo</div>
-            </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {managedUsers.slice(0, 4).map((u) => {
+              const isSelected = usernameOrEmail === u.username;
+              return (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => selectQuickAccount(u)}
+                  className={`rounded-xl p-2.5 text-left transition active:scale-95 border flex flex-col justify-between ${
+                    isSelected
+                      ? 'bg-emerald-950/40 border-emerald-500/60 ring-1 ring-emerald-500/30'
+                      : 'bg-slate-950 border-slate-800/80 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-xs font-bold text-white truncate">
+                      {u.displayName.split(' ')[0]} {u.displayName.split(' ')[1] || ''}
+                    </span>
+                    <span
+                      className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${
+                        u.role === 'admin'
+                          ? 'bg-purple-500/20 text-purple-300'
+                          : u.role === 'supervisor'
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {u.role}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate mt-1 flex items-center gap-1">
+                    <Building2 className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                    <span className="truncate">{u.assignedStoreName}</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Login / Register Card */}
-        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 shadow-2xl space-y-5">
-          {/* Pre-Authorized Google Sign In Option */}
+        {/* Login Card */}
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-2xl space-y-4">
+          {/* Google Sign In for Admin */}
           <button
             type="button"
             onClick={handleGoogleSignIn}
@@ -388,37 +341,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
               <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
               <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
             </svg>
-            <span>Sign In with Google</span>
+            <span>Sign In with Google (Admin)</span>
           </button>
 
           <div className="relative flex items-center justify-center">
             <span className="w-full border-t border-slate-800" />
-            <span className="bg-slate-900 px-3 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-              Or with Username & Password
+            <span className="bg-slate-900 px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              Or Sign In with Credentials
             </span>
             <span className="w-full border-t border-slate-800" />
-          </div>
-
-          {/* Form Tabs */}
-          <div className="grid grid-cols-2 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => { setIsRegisterMode(false); setErrorMessage(null); }}
-              className={`py-2 rounded-lg transition ${
-                !isRegisterMode ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              type="button"
-              onClick={() => { setIsRegisterMode(true); setErrorMessage(null); }}
-              className={`py-2 rounded-lg transition ${
-                isRegisterMode ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Create Account
-            </button>
           </div>
 
           {errorMessage && (
@@ -427,93 +358,29 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Display Name (Required on Register) */}
-            {isRegisterMode && (
-              <>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Your Full Name / Username <span className="text-emerald-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="e.g. Alex Mercer"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 pl-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
-                      required
-                    />
-                    <User className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Account Role & Permissions <span className="text-emerald-400">*</span>
-                  </label>
-                  <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-semibold">
-                    <button
-                      type="button"
-                      onClick={() => setUserRole('counter')}
-                      className={`py-2 rounded-lg transition ${
-                        userRole === 'counter' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Counter
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUserRole('supervisor')}
-                      className={`py-2 rounded-lg transition ${
-                        userRole === 'supervisor' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Supervisor
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUserRole('admin')}
-                      className={`py-2 rounded-lg transition ${
-                        userRole === 'admin' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Admin
-                    </button>
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-1">
-                    {userRole === 'admin'
-                      ? 'Admin: Upload item masterlist and extract counted inventory.'
-                      : userRole === 'supervisor'
-                      ? 'Supervisor: Team overview and store auditing (extraction restricted to Admin).'
-                      : 'Counter: Barcode scanning and physical inventory counts.'}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* Email / Username */}
+          <form onSubmit={handleLoginSubmit} className="space-y-3.5">
+            {/* Username or Email */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Username / Email <span className="text-emerald-400">*</span>
+                Username or Login Email <span className="text-emerald-400">*</span>
               </label>
               <div className="relative">
                 <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="counter@retailstore.com"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 pl-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                  type="text"
+                  value={usernameOrEmail}
+                  onChange={(e) => setUsernameOrEmail(e.target.value)}
+                  placeholder="e.g. counter.flagship or email"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 pl-10 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
                   required
                 />
-                <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+                <User className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
               </div>
             </div>
 
-            {/* Password */}
+            {/* Password / Access Code */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Password <span className="text-emerald-400">*</span>
+                Password / Access PIN <span className="text-emerald-400">*</span>
               </label>
               <div className="relative">
                 <input
@@ -521,31 +388,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 pl-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 pl-10 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
                   required
                 />
-                <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
-              </div>
-            </div>
-
-            {/* Active Store Selection at Login */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Select Active Retail Store <span className="text-emerald-400">*</span>
-              </label>
-              <div className="relative">
-                <select
-                  value={selectedStoreId}
-                  onChange={(e) => setSelectedStoreId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 pl-10 text-xs text-white focus:border-emerald-500 focus:outline-none appearance-none"
-                >
-                  {DEFAULT_STORES.map((s) => (
-                    <option key={s.storeId} value={s.storeId}>
-                      {s.name} ({s.storeId}) — {s.location}
-                    </option>
-                  ))}
-                </select>
-                <Building2 className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+                <Lock className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
               </div>
             </div>
 
@@ -553,9 +399,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLoginSuccess }) => {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full h-12 rounded-xl bg-emerald-600 text-sm font-bold text-white shadow-xl shadow-emerald-950 hover:bg-emerald-500 active:scale-98 transition flex items-center justify-center gap-2 disabled:opacity-50"
+              className="w-full h-11 rounded-xl bg-emerald-600 text-xs font-bold text-white shadow-xl shadow-emerald-950 hover:bg-emerald-500 active:scale-98 transition flex items-center justify-center gap-2 disabled:opacity-50 mt-1"
             >
-              <span>{isLoading ? 'Authenticating...' : isRegisterMode ? 'Create Account & Start' : 'Sign In & Start Counting'}</span>
+              <span>{isLoading ? 'Verifying Credentials...' : 'Sign In to Designated Store'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

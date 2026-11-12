@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { InventoryCount, Store } from '../types/inventory';
+import { InventoryCount, Store, AppUser } from '../types/inventory';
 import {
   Calendar,
   Search,
@@ -11,17 +11,21 @@ import {
   ArrowUpDown,
   FileSpreadsheet,
   MapPin,
+  Building2,
+  Shield,
 } from 'lucide-react';
 
 interface HistoryScreenProps {
   counts: InventoryCount[];
   activeStore: Store;
+  currentUser?: AppUser;
 }
 
-export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStore }) => {
+export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStore, currentUser }) => {
+  const isAdmin = currentUser?.role === 'admin';
   const [skuFilter, setSkuFilter] = useState('');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'yesterday' | 'week'>('all');
-  const [storeFilter, setStoreFilter] = useState<'all' | 'current'>('all');
+  const [storeFilter, setStoreFilter] = useState<'all' | 'current'>(isAdmin ? 'all' : 'current');
 
   const todayStr = new Date().toISOString().split('T')[0];
   const yesterday = new Date();
@@ -34,6 +38,19 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
   // Filter counts
   const filteredCounts = useMemo(() => {
     return counts.filter(item => {
+      // For counters and supervisors: strictly lock to designated store
+      if (!isAdmin) {
+        const matchesDesignated =
+          item.storeId === activeStore.storeId ||
+          item.store.toLowerCase() === activeStore.name.toLowerCase();
+        if (!matchesDesignated) return false;
+      } else if (storeFilter === 'current') {
+        // Admin selected current store filter
+        if (item.storeId !== activeStore.storeId && item.store !== activeStore.name) {
+          return false;
+        }
+      }
+
       // SKU / description / location match
       if (skuFilter.trim()) {
         const query = skuFilter.trim().toLowerCase();
@@ -42,11 +59,6 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
         const matchesBarcode = (item.barcode || '').toLowerCase().includes(query);
         const matchesLoc = (item.location || '').toLowerCase().includes(query);
         if (!matchesSku && !matchesDesc && !matchesBarcode && !matchesLoc) return false;
-      }
-
-      // Store filter
-      if (storeFilter === 'current' && item.storeId !== activeStore.storeId && item.store !== activeStore.name) {
-        return false;
       }
 
       // Date filter
@@ -61,7 +73,7 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
 
       return true;
     });
-  }, [counts, skuFilter, dateFilter, storeFilter, activeStore, todayStr, yesterdayStr, oneWeekAgo]);
+  }, [counts, skuFilter, dateFilter, storeFilter, activeStore, isAdmin, todayStr, yesterdayStr, oneWeekAgo]);
 
   const totalCountedUnits = useMemo(() => {
     return filteredCounts.reduce((acc, curr) => acc + (Number(curr.countedQuantity) || 0), 0);
@@ -127,27 +139,39 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
 
         {/* Store Scope Toggle */}
         <div className="flex items-center gap-2 pt-1 border-t border-slate-800/80 text-xs">
-          <span className="text-slate-400 text-[11px]">Store:</span>
-          <button
-            onClick={() => setStoreFilter('all')}
-            className={`rounded-md px-2 py-1 text-xs transition ${
-              storeFilter === 'all'
-                ? 'bg-slate-700 text-white font-semibold'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            All Stores
-          </button>
-          <button
-            onClick={() => setStoreFilter('current')}
-            className={`rounded-md px-2 py-1 text-xs transition ${
-              storeFilter === 'current'
-                ? 'bg-slate-700 text-white font-semibold'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Current ({activeStore.storeId})
-          </button>
+          <span className="text-slate-400 text-[11px] font-semibold">Store:</span>
+          {isAdmin ? (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setStoreFilter('all')}
+                className={`rounded-md px-2 py-1 text-xs transition ${
+                  storeFilter === 'all'
+                    ? 'bg-purple-600 text-white font-semibold shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                All Stores
+              </button>
+              <button
+                onClick={() => setStoreFilter('current')}
+                className={`rounded-md px-2 py-1 text-xs transition ${
+                  storeFilter === 'current'
+                    ? 'bg-purple-600 text-white font-semibold shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Current ({activeStore.storeId})
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 rounded-lg bg-slate-800/90 border border-slate-700/80 px-2 py-0.5 text-xs text-slate-200">
+              <Building2 className="w-3 h-3 text-emerald-400" />
+              <span className="font-semibold">{activeStore.name} ({activeStore.storeId})</span>
+              <span className="text-[9px] font-black uppercase tracking-wider text-emerald-400 bg-emerald-500/15 px-1 py-0.2 rounded ml-1">
+                Designated Branch
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
