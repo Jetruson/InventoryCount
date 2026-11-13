@@ -87,7 +87,8 @@ export type AuditActionType =
   | 'LOCATION_CHANGED'
   | 'ITEM_DETAILS_CHANGED'
   | 'RECORD_VOIDED'
-  | 'VOID_REJECTED';
+  | 'VOID_REJECTED'
+  | 'COUNTS_PURGED';
 
 export interface AuditLogEntry {
   id: string;

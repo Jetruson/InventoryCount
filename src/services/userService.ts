@@ -1,5 +1,6 @@
-import { ManagedUser } from '../types/inventory';
-import { db } from '../firebase/config';
+import { AppUser, ManagedUser } from '../types/inventory';
+import { auth, db } from '../firebase/config';
+import { EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
@@ -261,4 +262,45 @@ export function findUserForAuth(
   }
 
   return matched;
+}
+
+/**
+ * Verifies the logged-in administrator's password before destructive actions.
+ */
+export async function verifyAdminPassword(
+  currentUser: AppUser,
+  enteredPassword: string,
+  usersList?: ManagedUser[]
+): Promise<boolean> {
+  if (currentUser.role !== 'admin') return false;
+  const trimmed = enteredPassword.trim();
+  if (!trimmed) return false;
+
+  const users = usersList && usersList.length > 0 ? usersList : getLocalManagedUsers();
+  const emailLower = (currentUser.email || '').trim().toLowerCase();
+  const matchedAdmin = users.find(
+    (u) =>
+      u.role === 'admin' &&
+      (u.id === currentUser.uid ||
+        u.username.toLowerCase() === emailLower ||
+        (u.username.includes('@') && u.username.split('@')[0].toLowerCase() === emailLower.split('@')[0]))
+  );
+
+  if (matchedAdmin?.password) {
+    if (matchedAdmin.password === trimmed || matchedAdmin.password === enteredPassword) {
+      return true;
+    }
+  }
+
+  if (auth.currentUser && auth.currentUser.email) {
+    try {
+      const cred = EmailAuthProvider.credential(auth.currentUser.email, enteredPassword);
+      await reauthenticateWithCredential(auth.currentUser, cred);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
 }

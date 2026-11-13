@@ -47,6 +47,7 @@ const ACTION_LABELS: Record<AuditActionType, string> = {
   ITEM_DETAILS_CHANGED: 'Item Details Changed',
   RECORD_VOIDED: 'Record Voided',
   VOID_REJECTED: 'Void Rejected',
+  COUNTS_PURGED: 'Counts Deleted (Admin)',
 };
 
 export const AuditTrailScreen: React.FC<AuditTrailScreenProps> = ({
@@ -565,7 +566,9 @@ export const AuditTrailScreen: React.FC<AuditTrailScreenProps> = ({
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span
                       className={`rounded-md px-2 py-0.5 text-[10px] font-black uppercase border ${
-                        log.action === 'RECORD_VOIDED' || log.action === 'VOID_REQUESTED'
+                        log.action === 'RECORD_VOIDED' ||
+                        log.action === 'VOID_REQUESTED' ||
+                        log.action === 'COUNTS_PURGED'
                           ? 'bg-rose-500/20 border-rose-500/30 text-rose-300'
                           : log.action === 'CORRECTION_APPROVED' ||
                             log.action === 'QUANTITY_CHANGED' ||

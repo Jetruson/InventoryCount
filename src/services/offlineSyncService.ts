@@ -1,6 +1,6 @@
-import { InventoryCount } from '../types/inventory';
+import { AppUser, InventoryCount, Store } from '../types/inventory';
 import { db } from '../firebase/config';
-import { recordCountSubmittedAuditLog } from './auditService';
+import { appendImmutableAuditLog, recordCountSubmittedAuditLog } from './auditService';
 import {
   collection,
   doc,
@@ -11,6 +11,7 @@ import {
   query,
   orderBy,
   limit,
+  writeBatch,
 } from 'firebase/firestore';
 
 const LOCAL_COUNTS_KEY = 'inventory_counts_local_history';
@@ -333,6 +334,112 @@ export async function migrateLegacyCountRecords(): Promise<void> {
   } catch (err) {
     console.warn('Legacy count migration skipped or deferred:', err);
   }
+}
+
+/**
+ * Admin-only: Deletes all inventory count records for a single specified store.
+ */
+export async function deleteCountsByStore(
+  store: Store,
+  adminUser: AppUser
+): Promise<{ deletedCount: number }> {
+  if (adminUser.role !== 'admin') {
+    throw new Error('Only System Administrators can delete inventory counts.');
+  }
+
+  const matchesStore = (item: { storeId?: string; store?: string }) =>
+    item.storeId === store.storeId ||
+    (item.store || '').toLowerCase() === store.name.toLowerCase();
+
+  let firestoreDeleted = 0;
+  const snapshot = await getDocs(collection(db, 'inventory_counts'));
+  const matchingDocs = snapshot.docs.filter((d) => matchesStore(d.data()));
+
+  for (let i = 0; i < matchingDocs.length; i += 450) {
+    const batch = writeBatch(db);
+    matchingDocs.slice(i, i + 450).forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    firestoreDeleted += Math.min(450, matchingDocs.length - i);
+  }
+
+  const currentLocal = getLocalCounts();
+  const localMatchCount = currentLocal.filter(matchesStore).length;
+  saveLocalCounts(currentLocal.filter((c) => !matchesStore(c)));
+
+  const currentPending = getPendingQueue();
+  savePendingQueue(currentPending.filter((c) => !matchesStore(c)));
+  notifyListeners();
+
+  const totalDeleted = Math.max(firestoreDeleted, localMatchCount);
+
+  await appendImmutableAuditLog({
+    inventoryCountId: `BULK-STORE-${store.storeId}`,
+    store: store.name,
+    storeId: store.storeId,
+    sku: 'ALL',
+    itemDescription: `Store Counts Deleted (${store.name})`,
+    location: 'All Locations',
+    originalValue: `${totalDeleted} count record(s)`,
+    newValue: '0 count records in store',
+    action: 'COUNTS_PURGED',
+    approvalStatus: 'Approved',
+    reason: `Administrator deleted all counts for store ${store.name} (${store.storeId})`,
+    requestedBy: adminUser.displayName || adminUser.email,
+    requestedById: adminUser.uid,
+    reviewedBy: adminUser.displayName || adminUser.email,
+    reviewedById: adminUser.uid,
+  });
+
+  return { deletedCount: totalDeleted };
+}
+
+/**
+ * Admin-only: Deletes all inventory count records across all stores.
+ */
+export async function deleteAllCounts(
+  adminUser: AppUser
+): Promise<{ deletedCount: number }> {
+  if (adminUser.role !== 'admin') {
+    throw new Error('Only System Administrators can delete inventory counts.');
+  }
+
+  let firestoreDeleted = 0;
+  const snapshot = await getDocs(collection(db, 'inventory_counts'));
+  const allDocs = snapshot.docs;
+
+  for (let i = 0; i < allDocs.length; i += 450) {
+    const batch = writeBatch(db);
+    allDocs.slice(i, i + 450).forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    firestoreDeleted += Math.min(450, allDocs.length - i);
+  }
+
+  const localCount = getLocalCounts().length;
+  saveLocalCounts([]);
+  savePendingQueue([]);
+  notifyListeners();
+
+  const totalDeleted = Math.max(firestoreDeleted, localCount);
+
+  await appendImmutableAuditLog({
+    inventoryCountId: 'BULK-ALL-STORES',
+    store: 'All Stores',
+    storeId: 'ALL',
+    sku: 'ALL',
+    itemDescription: 'All Inventory Counts Deleted (All Stores)',
+    location: 'All Locations',
+    originalValue: `${totalDeleted} count record(s)`,
+    newValue: '0 count records across all stores',
+    action: 'COUNTS_PURGED',
+    approvalStatus: 'Approved',
+    reason: 'Administrator deleted all inventory counts across the entire system',
+    requestedBy: adminUser.displayName || adminUser.email,
+    requestedById: adminUser.uid,
+    reviewedBy: adminUser.displayName || adminUser.email,
+    reviewedById: adminUser.uid,
+  });
+
+  return { deletedCount: totalDeleted };
 }
 
 // Global online & focus listeners to auto-sync when network returns or app returns to foreground

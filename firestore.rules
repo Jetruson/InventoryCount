@@ -46,7 +46,7 @@ service cloud.firestore {
              data.itemDescription is string && data.itemDescription.size() <= 500 &&
              data.originalValue is string && data.originalValue.size() <= 1000 &&
              data.newValue is string && data.newValue.size() <= 1000 &&
-             data.action in ['COUNT_SUBMITTED', 'CORRECTION_REQUESTED', 'VOID_REQUESTED', 'CORRECTION_APPROVED', 'CORRECTION_REJECTED', 'QUANTITY_CHANGED', 'LOCATION_CHANGED', 'ITEM_DETAILS_CHANGED', 'RECORD_VOIDED', 'VOID_REJECTED'] &&
+             data.action in ['COUNT_SUBMITTED', 'CORRECTION_REQUESTED', 'VOID_REQUESTED', 'CORRECTION_APPROVED', 'CORRECTION_REJECTED', 'QUANTITY_CHANGED', 'LOCATION_CHANGED', 'ITEM_DETAILS_CHANGED', 'RECORD_VOIDED', 'VOID_REJECTED', 'COUNTS_PURGED'] &&
              data.reason is string && data.reason.size() <= 1000 &&
              data.requestedBy is string && data.requestedBy.size() > 0 && data.requestedBy.size() <= 150 &&
              data.requestedById is string && data.requestedById.size() > 0 && data.requestedById.size() <= 128 &&
@@ -86,7 +86,7 @@ service cloud.firestore {
                        isValidCount(request.resource.data) &&
                        request.resource.data.userId == resource.data.userId &&
                        (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt);
-      allow delete: if false;
+      allow delete: if isValidId(countId);
     }
 
     // Correction & Void Requests Collection

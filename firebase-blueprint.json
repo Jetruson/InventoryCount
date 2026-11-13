@@ -262,7 +262,7 @@
         "newValue": { "type": "string", "description": "After-change snapshot summary" },
         "action": {
           "type": "string",
-          "enum": ["COUNT_SUBMITTED", "CORRECTION_REQUESTED", "VOID_REQUESTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "QUANTITY_CHANGED", "LOCATION_CHANGED", "ITEM_DETAILS_CHANGED", "RECORD_VOIDED", "VOID_REJECTED"],
+          "enum": ["COUNT_SUBMITTED", "CORRECTION_REQUESTED", "VOID_REQUESTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "QUANTITY_CHANGED", "LOCATION_CHANGED", "ITEM_DETAILS_CHANGED", "RECORD_VOIDED", "VOID_REJECTED", "COUNTS_PURGED"],
           "description": "Action performed"
         },
         "approvalStatus": { "type": "string", "enum": ["N/A", "Pending", "Approved", "Rejected"] },

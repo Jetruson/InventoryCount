@@ -8,7 +8,9 @@ import {
   addManagedUser,
   updateManagedUser,
   deleteManagedUser,
+  verifyAdminPassword,
 } from '../services/userService';
+import { deleteCountsByStore, deleteAllCounts } from '../services/offlineSyncService';
 import * as XLSX from 'xlsx';
 import {
   ShieldAlert,
@@ -42,6 +44,8 @@ import {
   ShieldCheck,
   UserPlus,
   Lock,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 interface AdminScreenProps {
@@ -100,6 +104,15 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
 
+  // Admin Delete Counts (By Store / All) with Password Confirmation
+  const [deleteTargetStoreId, setDeleteTargetStoreId] = useState<string>(stores[0]?.storeId || '');
+  const [purgeModalMode, setPurgeModalMode] = useState<'store' | 'all' | null>(null);
+  const [purgePassword, setPurgePassword] = useState<string>('');
+  const [showPurgePassword, setShowPurgePassword] = useState<boolean>(false);
+  const [purgeError, setPurgeError] = useState<string | null>(null);
+  const [purgeSuccess, setPurgeSuccess] = useState<string | null>(null);
+  const [isPurging, setIsPurging] = useState<boolean>(false);
+
   // User Management state (Admin only)
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>(getLocalManagedUsers());
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState<boolean>(false);
@@ -127,6 +140,79 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (stores.length > 0 && !stores.some((s) => s.storeId === deleteTargetStoreId)) {
+      setDeleteTargetStoreId(stores[0].storeId);
+    }
+  }, [stores, deleteTargetStoreId]);
+
+  const targetStoreObj = useMemo(
+    () => stores.find((s) => s.storeId === deleteTargetStoreId) || stores[0],
+    [stores, deleteTargetStoreId]
+  );
+
+  const targetStoreCountRecords = useMemo(() => {
+    if (!targetStoreObj) return 0;
+    return counts.filter(
+      (c) =>
+        c.storeId === targetStoreObj.storeId ||
+        c.store.toLowerCase() === targetStoreObj.name.toLowerCase()
+    ).length;
+  }, [counts, targetStoreObj]);
+
+  const openPurgeModal = (mode: 'store' | 'all') => {
+    setPurgeError(null);
+    setPurgePassword('');
+    setShowPurgePassword(false);
+    setPurgeModalMode(mode);
+  };
+
+  const handleConfirmPurgeCounts = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!purgeModalMode) return;
+    setPurgeError(null);
+    setPurgeSuccess(null);
+
+    if (!purgePassword.trim()) {
+      setPurgeError('Please enter your administrator password to confirm deletion.');
+      return;
+    }
+
+    setIsPurging(true);
+    try {
+      const verified = await verifyAdminPassword(currentUser, purgePassword, managedUsers);
+      if (!verified) {
+        setPurgeError('Incorrect administrator password. Deletion was cancelled.');
+        setIsPurging(false);
+        return;
+      }
+
+      if (purgeModalMode === 'store') {
+        if (!targetStoreObj) {
+          setPurgeError('Please select a valid store.');
+          setIsPurging(false);
+          return;
+        }
+        const { deletedCount } = await deleteCountsByStore(targetStoreObj, currentUser);
+        setPurgeSuccess(
+          `Deleted ${deletedCount} count record(s) for ${targetStoreObj.name} (${targetStoreObj.storeId}). Action logged in Audit Trail.`
+        );
+      } else {
+        const { deletedCount } = await deleteAllCounts(currentUser);
+        setPurgeSuccess(
+          `Deleted all ${deletedCount} count record(s) across all stores. Action logged in Audit Trail.`
+        );
+      }
+
+      setPurgeModalMode(null);
+      setPurgePassword('');
+    } catch (err: any) {
+      setPurgeError(err?.message || 'Failed to delete inventory counts. Check connection.');
+    } finally {
+      setIsPurging(false);
+    }
+  };
 
   const handleSelectNewUserRole = (role: UserRole) => {
     setNewUserRole(role);
@@ -1499,6 +1585,119 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Danger Zone: Delete Counts by Store or Entire System (Password Protected) */}
+          <div className="rounded-2xl bg-slate-900 border border-rose-500/30 p-4 shadow-md space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <div className="flex items-start gap-2.5">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-white">Delete Inventory Counts</h4>
+                    <span className="rounded-md bg-rose-500/20 text-rose-300 px-2 py-0.5 text-[10px] font-black uppercase">
+                      Password Required
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Permanently clear count records for a single store or reset all counts across every store. Requires administrator password confirmation.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {purgeSuccess && (
+              <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 p-3 text-xs font-semibold text-emerald-300 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{purgeSuccess}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPurgeSuccess(null)}
+                  className="text-emerald-300 hover:text-white p-0.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Delete By Store */}
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-3.5 space-y-3 flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Building2 className="w-3.5 h-3.5 text-rose-400" />
+                      Delete Counts by Store
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {targetStoreCountRecords} record(s)
+                    </span>
+                  </div>
+                  <select
+                    value={deleteTargetStoreId}
+                    onChange={(e) => setDeleteTargetStoreId(e.target.value)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-rose-400 focus:outline-none"
+                  >
+                    {stores.map((s) => {
+                      const storeRecs = counts.filter(
+                        (c) =>
+                          c.storeId === s.storeId ||
+                          c.store.toLowerCase() === s.name.toLowerCase()
+                      ).length;
+                      return (
+                        <option key={s.storeId} value={s.storeId}>
+                          {s.name} ({s.storeId}) — {storeRecs} counts
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => openPurgeModal('store')}
+                  disabled={!targetStoreObj || targetStoreCountRecords === 0}
+                  className="w-full h-10 rounded-xl bg-rose-600/20 hover:bg-rose-600/35 border border-rose-500/40 text-xs font-bold text-rose-300 transition flex items-center justify-center gap-1.5 disabled:opacity-40"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>
+                    Delete {targetStoreObj ? targetStoreObj.storeId : 'Store'} Counts ({targetStoreCountRecords})
+                  </span>
+                </button>
+              </div>
+
+              {/* Delete All Counts */}
+              <div className="rounded-xl bg-rose-950/20 border border-rose-500/30 p-3.5 space-y-3 flex flex-col justify-between">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-200 flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                      Delete All Counts (All Stores)
+                    </span>
+                    <span className="text-[11px] font-mono text-rose-300 font-bold">
+                      {counts.length} total
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Clears every recorded inventory count across all branches to reset for a new count cycle.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => openPurgeModal('all')}
+                  disabled={counts.length === 0}
+                  className="w-full h-10 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white shadow-lg transition flex items-center justify-center gap-1.5 disabled:opacity-40"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete All Counts ({counts.length})</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2424,6 +2623,100 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow-md active:scale-95 transition disabled:opacity-50"
                 >
                   {isStoreSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: PASSWORD CONFIRMATION FOR DELETING COUNTS (ADMIN ONLY) */}
+      {/* ========================================================================= */}
+      {purgeModalMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-3">
+          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-rose-500/40 p-5 shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-100 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-rose-400">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+                <h3 className="text-sm font-bold text-white">
+                  {purgeModalMode === 'store'
+                    ? `Delete Counts for ${targetStoreObj?.name}`
+                    : 'Delete All Inventory Counts'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPurgeModalMode(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-rose-950/30 border border-rose-500/30 p-3 text-xs text-rose-200 space-y-1">
+              <p className="font-bold text-rose-300">
+                {purgeModalMode === 'store'
+                  ? `You are about to permanently delete ${targetStoreCountRecords} count record(s) from ${targetStoreObj?.name} (${targetStoreObj?.storeId}).`
+                  : `You are about to permanently delete ALL ${counts.length} count record(s) across ALL stores.`}
+              </p>
+              <p className="text-[11px] text-rose-200/80">
+                This action cannot be undone. An immutable audit entry will still record this deletion in the Audit Trail.
+              </p>
+            </div>
+
+            {purgeError && (
+              <div className="rounded-xl bg-rose-500/15 border border-rose-500/40 p-2.5 text-xs font-semibold text-rose-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>{purgeError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmPurgeCounts} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Enter Administrator Password to Confirm <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPurgePassword ? 'text' : 'password'}
+                    value={purgePassword}
+                    onChange={(e) => setPurgePassword(e.target.value)}
+                    placeholder="Enter your admin password..."
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 pl-9 pr-10 text-xs text-white placeholder-slate-500 focus:border-rose-400 focus:outline-none"
+                    autoFocus
+                    required
+                  />
+                  <Lock className="w-3.5 h-3.5 text-rose-400 absolute left-3 top-3" />
+                  <button
+                    type="button"
+                    onClick={() => setShowPurgePassword(!showPurgePassword)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white p-0.5"
+                    aria-label={showPurgePassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPurgePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Verifying account: {currentUser.email || currentUser.displayName}
+                </span>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setPurgeModalMode(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-semibold text-slate-300 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isPurging || !purgePassword.trim()}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white shadow-md active:scale-95 transition disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isPurging ? 'Deleting Counts...' : 'Confirm & Delete'}</span>
                 </button>
               </div>
             </form>
