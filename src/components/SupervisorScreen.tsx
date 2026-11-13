@@ -24,7 +24,8 @@ interface SupervisorScreenProps {
 }
 
 export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stores, currentUser }) => {
-  const isSupervisor = currentUser?.role === 'supervisor';
+  const isStoreSupervisor = currentUser?.role === 'supervisor';
+  const isOpsSupervisor = currentUser?.role === 'ops_supervisor';
   const assignedStoreId = currentUser?.assignedStoreId || currentUser?.activeStoreId;
   const assignedStore = useMemo(() => {
     return stores.find((s) => s.storeId === assignedStoreId) || stores[0];
@@ -36,9 +37,9 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
   const [activeTab, setActiveTab] = useState<'all' | 'by_user' | 'by_store' | 'by_location'>('all');
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
-  // Scoped dataset: supervisor ONLY sees counts from their assigned store
+  // Scoped dataset: store supervisor ONLY sees counts from their assigned store; ops_supervisor & admin see all stores
   const scopedCounts = useMemo(() => {
-    if (isSupervisor && assignedStore) {
+    if (isStoreSupervisor && assignedStore) {
       return counts.filter(
         (c) =>
           c.storeId === assignedStore.storeId ||
@@ -46,13 +47,13 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
       );
     }
     return counts;
-  }, [counts, isSupervisor, assignedStore]);
+  }, [counts, isStoreSupervisor, assignedStore]);
 
   // Filtered dataset
   const filteredSubmissions = useMemo(() => {
     return scopedCounts.filter((c) => {
-      // Store filter (only active if admin)
-      if (!isSupervisor && selectedStore !== 'all') {
+      // Store filter (active for admin and ops_supervisor)
+      if (!isStoreSupervisor && selectedStore !== 'all') {
         const matchesStore = c.storeId === selectedStore || c.store.toLowerCase().includes(selectedStore.toLowerCase());
         if (!matchesStore) return false;
       }
@@ -75,7 +76,7 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
 
       return true;
     });
-  }, [scopedCounts, isSupervisor, selectedStore, selectedUser, searchQuery]);
+  }, [scopedCounts, isStoreSupervisor, selectedStore, selectedUser, searchQuery]);
 
   // Unique users list
   const userList = useMemo(() => {
@@ -249,21 +250,36 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
       <div className="rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-slate-800 p-4 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className={`text-xs font-bold uppercase tracking-wider ${isSupervisor ? 'text-amber-400' : 'text-emerald-400'}`}>
-              Supervisor Management
+            <span
+              className={`text-xs font-bold uppercase tracking-wider ${
+                isStoreSupervisor
+                  ? 'text-amber-400'
+                  : isOpsSupervisor
+                  ? 'text-cyan-400'
+                  : 'text-emerald-400'
+              }`}
+            >
+              {isOpsSupervisor ? 'Operations Counter Supervision' : 'Supervisor Management'}
             </span>
-            {isSupervisor && (
+            {isStoreSupervisor && (
               <span className="rounded-md bg-amber-500/20 text-amber-300 px-2 py-0.5 text-[10px] font-black uppercase">
                 Assigned Store Scope
               </span>
             )}
+            {isOpsSupervisor && (
+              <span className="rounded-md bg-cyan-500/20 text-cyan-300 px-2 py-0.5 text-[10px] font-black uppercase">
+                All Stores & Counters
+              </span>
+            )}
           </div>
           <h2 className="text-lg font-black text-white mt-0.5">
-            {isSupervisor ? `${assignedStore?.name} (${assignedStore?.storeId})` : 'Store Count Oversight & Audit (All Branches)'}
+            {isStoreSupervisor
+              ? `${assignedStore?.name} (${assignedStore?.storeId})`
+              : 'All Counter Submissions & Audit (All Branches)'}
           </h2>
-          {isSupervisor && (
+          {isStoreSupervisor && (
             <p className="text-xs text-slate-400 mt-0.5">
-              Supervisors only have visibility into their designated store branch
+              Store supervisors only have visibility into their designated store branch
             </p>
           )}
         </div>
@@ -321,7 +337,7 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
             <label className="block text-[11px] font-semibold text-slate-400 mb-1">
               Store Scope
             </label>
-            {isSupervisor ? (
+            {isStoreSupervisor ? (
               <div className="w-full flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 font-semibold shadow-xs">
                 <div className="flex items-center gap-1.5 truncate">
                   <Building2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />

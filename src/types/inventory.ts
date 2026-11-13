@@ -32,13 +32,15 @@ export interface Store {
   location: string;
 }
 
+export type UserRole = 'counter' | 'ops_counter' | 'supervisor' | 'ops_supervisor' | 'admin';
+
 export interface AppUser {
   uid: string;
   email: string;
   displayName: string;
-  role: 'counter' | 'supervisor' | 'admin';
+  role: UserRole;
   activeStoreId?: string;
-  assignedStoreId?: string; // For supervisors and counters (strictly locked to this store)
+  assignedStoreId?: string; // For store supervisors and store counters (strictly locked to this store)
   assignedStoreName?: string;
 }
 
@@ -47,7 +49,7 @@ export interface ManagedUser {
   username: string; // username or login email
   displayName: string;
   password?: string; // access code or password
-  role: 'counter' | 'supervisor' | 'admin';
+  role: UserRole;
   assignedStoreId: string;
   assignedStoreName: string;
   createdAt: string;

@@ -1,30 +1,41 @@
 import React, { useState, useEffect } from 'react';
 import { Product, AppUser } from '../types/inventory';
-import { fetchCatalog, getLocalCatalog } from '../services/catalogService';
+import { subscribeToCatalog, getLocalCatalog } from '../services/catalogService';
 import { AddProductModal } from './AddProductModal';
 import { Package, Search, Plus, Barcode, Tag, Sparkles, ShieldAlert } from 'lucide-react';
 
 interface CatalogScreenProps {
   currentUser?: AppUser;
+  catalog?: Product[];
   onSelectProductForCount?: (product: Product) => void;
 }
 
-export const CatalogScreen: React.FC<CatalogScreenProps> = ({ currentUser, onSelectProductForCount }) => {
-  const [products, setProducts] = useState<Product[]>([]);
+export const CatalogScreen: React.FC<CatalogScreenProps> = ({
+  currentUser,
+  catalog: externalCatalog,
+  onSelectProductForCount,
+}) => {
+  const [products, setProducts] = useState<Product[]>(() =>
+    externalCatalog && externalCatalog.length > 0 ? externalCatalog : getLocalCatalog()
+  );
   const [search, setSearch] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
-  const canAddSku = currentUser?.role === 'supervisor' || currentUser?.role === 'admin';
+  const canAddSku =
+    currentUser?.role === 'supervisor' ||
+    currentUser?.role === 'ops_supervisor' ||
+    currentUser?.role === 'admin';
 
   useEffect(() => {
-    // Initial local read
-    setProducts(getLocalCatalog());
-
-    // Background fetch from Firestore
-    fetchCatalog().then((fetched) => {
-      setProducts(fetched);
+    if (externalCatalog) {
+      setProducts(externalCatalog);
+      return;
+    }
+    const unsub = subscribeToCatalog((live) => {
+      setProducts(live);
     });
-  }, []);
+    return () => unsub();
+  }, [externalCatalog]);
 
   const categories = Array.from(new Set(products.map((p) => p.category || 'General')));
 

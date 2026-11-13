@@ -28,7 +28,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   const allTabs: TabItem[] = [
     { id: 'count', label: 'Count', icon: Camera },
     { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
-    ...(role === 'supervisor' || role === 'admin'
+    ...(role === 'supervisor' || role === 'ops_supervisor' || role === 'admin'
       ? [{ id: 'supervisor' as ActiveTab, label: 'Supervisor', icon: ShieldCheck }]
       : []),
     ...(role === 'admin'

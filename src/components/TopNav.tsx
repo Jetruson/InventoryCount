@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
-import { Store, AppUser } from '../types/inventory';
+import { Store, AppUser, UserRole } from '../types/inventory';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
   Barcode,
   Building2,
   ChevronDown,
   LogOut,
-  User,
   Check,
-  Shield,
   X,
 } from 'lucide-react';
 
@@ -20,6 +18,22 @@ interface TopNavProps {
   onLogout: () => void;
 }
 
+function getRoleDisplayLabel(role: UserRole): string {
+  switch (role) {
+    case 'admin':
+      return 'System Administrator';
+    case 'ops_supervisor':
+      return 'Counter Supervisor (Ops)';
+    case 'supervisor':
+      return 'Store Supervisor';
+    case 'ops_counter':
+      return 'Operations Counter';
+    case 'counter':
+    default:
+      return 'Store Counter';
+  }
+}
+
 export const TopNav: React.FC<TopNavProps> = ({
   user,
   activeStore,
@@ -29,6 +43,11 @@ export const TopNav: React.FC<TopNavProps> = ({
 }) => {
   const [isStoreMenuOpen, setIsStoreMenuOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+
+  const canSwitchStore =
+    user.role === 'admin' ||
+    user.role === 'ops_counter' ||
+    user.role === 'ops_supervisor';
 
   return (
     <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 py-2">
@@ -43,19 +62,33 @@ export const TopNav: React.FC<TopNavProps> = ({
           </span>
         </div>
 
-        {/* Store Indicator / Switcher: ONLY admin users can switch stores */}
-        <div className="relative flex-1 max-w-[200px] sm:max-w-[250px]">
-          {user.role === 'admin' ? (
+        {/* Store Indicator / Switcher: Admin, Operations Counter, and Counter Supervisor (Ops) can switch stores */}
+        <div className="relative flex-1 max-w-[200px] sm:max-w-[260px]">
+          {canSwitchStore ? (
             <button
               onClick={() => {
                 setIsStoreMenuOpen(!isStoreMenuOpen);
                 setIsAccountMenuOpen(false);
               }}
-              className="w-full flex items-center justify-between gap-1.5 rounded-xl bg-slate-800 border border-purple-500/30 px-2.5 py-1.5 text-xs font-semibold text-slate-100 hover:bg-slate-700 active:scale-95 transition"
-              title="Admin: Switch Retail Store"
+              className={`w-full flex items-center justify-between gap-1.5 rounded-xl bg-slate-800 border px-2.5 py-1.5 text-xs font-semibold text-slate-100 hover:bg-slate-700 active:scale-95 transition min-h-[36px] ${
+                user.role === 'admin'
+                  ? 'border-purple-500/30'
+                  : user.role === 'ops_supervisor'
+                  ? 'border-cyan-500/30'
+                  : 'border-teal-500/30'
+              }`}
+              title="Switch Store Location"
             >
               <div className="flex items-center gap-1.5 min-w-0">
-                <Building2 className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                <Building2
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    user.role === 'admin'
+                      ? 'text-purple-400'
+                      : user.role === 'ops_supervisor'
+                      ? 'text-cyan-400'
+                      : 'text-teal-400'
+                  }`}
+                />
                 <span className="truncate text-[11px] sm:text-xs">
                   {activeStore.name}
                 </span>
@@ -64,7 +97,7 @@ export const TopNav: React.FC<TopNavProps> = ({
             </button>
           ) : (
             <div
-              className={`w-full flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-semibold select-none shadow-xs ${
+              className={`w-full flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-semibold select-none shadow-xs min-h-[36px] ${
                 user.role === 'supervisor'
                   ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
                   : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
@@ -72,7 +105,11 @@ export const TopNav: React.FC<TopNavProps> = ({
               title={`Designated Store: ${activeStore.name} (${activeStore.storeId}). Access is restricted exclusively to your assigned store.`}
             >
               <div className="flex items-center gap-1.5 min-w-0">
-                <Building2 className={`w-3.5 h-3.5 shrink-0 ${user.role === 'supervisor' ? 'text-amber-400' : 'text-emerald-400'}`} />
+                <Building2
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    user.role === 'supervisor' ? 'text-amber-400' : 'text-emerald-400'
+                  }`}
+                />
                 <span className="truncate text-[11px] sm:text-xs font-bold">
                   {activeStore.name}
                 </span>
@@ -89,15 +126,27 @@ export const TopNav: React.FC<TopNavProps> = ({
             </div>
           )}
 
-          {isStoreMenuOpen && user.role === 'admin' && (
+          {isStoreMenuOpen && canSwitchStore && (
             <>
               <div
                 className="fixed inset-0 z-40 bg-black/40 backdrop-blur-2xs"
                 onClick={() => setIsStoreMenuOpen(false)}
               />
               <div className="absolute left-0 mt-2 z-50 w-72 rounded-2xl bg-slate-900 border border-slate-800 p-2 shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-100">
-                <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-purple-400 border-b border-slate-800 flex items-center justify-between">
-                  <span>Switch Retail Store (Admin)</span>
+                <div
+                  className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b border-slate-800 flex items-center justify-between ${
+                    user.role === 'admin'
+                      ? 'text-purple-400'
+                      : user.role === 'ops_supervisor'
+                      ? 'text-cyan-400'
+                      : 'text-teal-400'
+                  }`}
+                >
+                  <span>
+                    {user.role === 'admin'
+                      ? 'Switch Retail Store (Admin)'
+                      : 'Select Store to Count (Ops)'}
+                  </span>
                   <span className="text-[9px] text-slate-400 font-normal">{stores.length} stores</span>
                 </div>
                 <div className="max-h-64 overflow-y-auto space-y-1 py-1.5">
@@ -112,7 +161,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                         }}
                         className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left text-xs transition ${
                           isCurrent
-                            ? 'bg-purple-600/20 text-purple-300 font-bold border border-purple-500/30'
+                            ? 'bg-emerald-600/20 text-emerald-300 font-bold border border-emerald-500/30'
                             : 'text-slate-300 hover:bg-slate-800 hover:text-white'
                         }`}
                       >
@@ -120,7 +169,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                           <div className="font-semibold text-white">{s.name}</div>
                           <div className="text-[10px] text-slate-400">{s.storeId} · {s.location}</div>
                         </div>
-                        {isCurrent && <Check className="w-4 h-4 text-purple-400 shrink-0" />}
+                        {isCurrent && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
                       </button>
                     );
                   })}
@@ -135,7 +184,7 @@ export const TopNav: React.FC<TopNavProps> = ({
           {/* PWA Install Button */}
           <PWAInstallButton compact />
 
-          {/* User Profile Badge (Clickable on Mobile for Account Menu & Logout) */}
+          {/* User Profile Badge */}
           <div className="relative">
             <button
               onClick={() => {
@@ -181,15 +230,21 @@ export const TopNav: React.FC<TopNavProps> = ({
                     <div className="text-xs text-slate-400 truncate">
                       {user.email || 'local-session'}
                     </div>
-                    <div className="pt-1 flex items-center gap-1.5">
-                      <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                        user.role === 'admin'
-                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                          : user.role === 'supervisor'
-                          ? 'bg-amber-500/15 text-amber-400'
-                          : 'bg-emerald-500/15 text-emerald-400'
-                      }`}>
-                        {user.role === 'admin' ? 'System Administrator' : `${user.role} Associate`}
+                    <div className="pt-1 flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                          user.role === 'admin'
+                            ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                            : user.role === 'ops_supervisor'
+                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                            : user.role === 'supervisor'
+                            ? 'bg-amber-500/15 text-amber-400'
+                            : user.role === 'ops_counter'
+                            ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                            : 'bg-emerald-500/15 text-emerald-400'
+                        }`}
+                      >
+                        {getRoleDisplayLabel(user.role)}
                       </span>
                       <span className="text-[10px] text-slate-500">· {activeStore.storeId}</span>
                     </div>
@@ -212,7 +267,7 @@ export const TopNav: React.FC<TopNavProps> = ({
             )}
           </div>
 
-          {/* Direct 1-Tap Logout Icon Button (Minimum 40x40px touch area) */}
+          {/* Direct 1-Tap Logout Icon Button */}
           <button
             onClick={onLogout}
             className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800/80 border border-slate-700/60 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 active:scale-95 transition shrink-0"

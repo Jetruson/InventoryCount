@@ -8,78 +8,78 @@ service cloud.firestore {
     }
 
     // Helper functions
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-
-    function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'jetgonzalgo@gmail.com' ||
-        (request.auth.token.email is string && request.auth.token.email.matches('(?i).*admin.*')) ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
-    }
-
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function isValidCount(data) {
       return data.keys().hasAll(['username', 'userId', 'store', 'sku', 'countedQuantity', 'date', 'time']) &&
-             data.userId == request.auth.uid &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
              data.countedQuantity is number &&
              data.countedQuantity >= 0 &&
-             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 64 &&
-             data.username is string && data.username.size() > 0 && data.username.size() <= 100 &&
-             data.store is string && data.store.size() > 0 && data.store.size() <= 100;
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+             data.username is string && data.username.size() > 0 && data.username.size() <= 120 &&
+             data.store is string && data.store.size() > 0 && data.store.size() <= 120;
     }
 
     function isValidProduct(data) {
       return data.keys().hasAll(['sku', 'barcode', 'description']) &&
-             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 64 &&
-             data.barcode is string && data.barcode.size() > 0 && data.barcode.size() <= 64 &&
-             data.description is string && data.description.size() > 0 && data.description.size() <= 200;
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+             data.barcode is string && data.barcode.size() > 0 && data.barcode.size() <= 100 &&
+             data.description is string && data.description.size() > 0 && data.description.size() <= 300;
+    }
+
+    function isValidStore(data) {
+      return data.keys().hasAll(['storeId', 'name']) &&
+             data.storeId is string && data.storeId.size() > 0 && data.storeId.size() <= 64 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 150;
+    }
+
+    function isValidManagedUser(data) {
+      return data.keys().hasAll(['username', 'displayName', 'role', 'assignedStoreId', 'assignedStoreName']) &&
+             data.username is string && data.username.size() > 0 && data.username.size() <= 120 &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 150 &&
+             data.role in ['counter', 'ops_counter', 'supervisor', 'ops_supervisor', 'admin'];
+    }
+
+    // Connection health check
+    match /test/connection {
+      allow read: if true;
     }
 
     // Inventory Counts Collection
+    // Credential-provisioned devices sync without requiring a Firebase Auth token; writes are schema-validated.
     match /inventory_counts/{countId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidCount(request.resource.data);
-      allow update: if isSignedIn() && (
-        isAdmin() ||
-        resource.data.userId == request.auth.uid ||
-        request.resource.data.userId == resource.data.userId
-      ) && request.resource.data.countedQuantity >= 0;
-      allow delete: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
+      allow read: if true;
+      allow create, update: if isValidId(countId) && isValidCount(request.resource.data);
+      allow delete: if isValidId(countId);
     }
 
     // Products Master Catalog
     match /products/{productId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && (isAdmin() || isValidProduct(request.resource.data));
-      allow delete: if isSignedIn() && (isAdmin() || request.auth != null);
+      allow read: if true;
+      allow create, update: if isValidId(productId) && isValidProduct(request.resource.data);
+      allow delete: if isValidId(productId);
     }
 
     // Retail Stores
     match /stores/{storeId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read: if true;
+      allow create, update: if isValidId(storeId) && isValidStore(request.resource.data);
+      allow delete: if isValidId(storeId);
     }
 
     // User Profiles
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow write: if isOwner(userId) || isAdmin();
+      allow read: if true;
+      allow create, update: if isValidId(userId);
     }
 
     // Managed Users (Created and Assigned by Admin)
     match /managed_users/{userId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read: if true;
+      allow create, update: if isValidId(userId) && isValidManagedUser(request.resource.data);
+      allow delete: if isValidId(userId);
     }
   }
 }

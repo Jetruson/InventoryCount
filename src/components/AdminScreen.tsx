@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { InventoryCount, Store, Product, MasterlistItem, CountVarianceItem, AppUser, ManagedUser } from '../types/inventory';
+import { InventoryCount, Store, Product, MasterlistItem, CountVarianceItem, AppUser, ManagedUser, UserRole } from '../types/inventory';
 import { bulkImportMasterlist, getLocalCatalog, deleteProductFromCatalog, clearAllProducts } from '../services/catalogService';
 import { addStore, deleteStore, updateStore } from '../services/storeService';
 import {
   getLocalManagedUsers,
-  fetchManagedUsers,
+  subscribeToManagedUsers,
   addManagedUser,
   updateManagedUser,
   deleteManagedUser,
@@ -106,26 +106,36 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   const [newDisplayName, setNewDisplayName] = useState<string>('');
   const [newUsername, setNewUsername] = useState<string>('');
   const [newPassword, setNewPassword] = useState<string>('');
-  const [newUserRole, setNewUserRole] = useState<'counter' | 'supervisor' | 'admin'>('counter');
+  const [newUserRole, setNewUserRole] = useState<UserRole>('counter');
   const [newUserStoreId, setNewUserStoreId] = useState<string>(stores[0]?.storeId || 'ST-101');
   const [userActionError, setUserActionError] = useState<string | null>(null);
   const [userActionSuccess, setUserActionSuccess] = useState<string | null>(null);
   const [userSearchQuery, setUserSearchQuery] = useState<string>('');
-  const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'counter' | 'supervisor' | 'admin'>('all');
+  const [userRoleFilter, setUserRoleFilter] = useState<'all' | UserRole>('all');
   const [userStoreFilter, setUserStoreFilter] = useState<string>('all');
   const [userToDelete, setUserToDelete] = useState<ManagedUser | null>(null);
   const [userToEdit, setUserToEdit] = useState<ManagedUser | null>(null);
   const [editDisplayName, setEditDisplayName] = useState<string>('');
   const [editPassword, setEditPassword] = useState<string>('');
-  const [editUserRole, setEditUserRole] = useState<'counter' | 'supervisor' | 'admin'>('counter');
+  const [editUserRole, setEditUserRole] = useState<UserRole>('counter');
   const [editUserStoreId, setEditUserStoreId] = useState<string>('');
   const [isUserSubmitting, setIsUserSubmitting] = useState<boolean>(false);
 
   useEffect(() => {
-    fetchManagedUsers().then((fetched) => {
+    const unsub = subscribeToManagedUsers((fetched) => {
       setManagedUsers(fetched);
     });
+    return () => unsub();
   }, []);
+
+  const handleSelectNewUserRole = (role: UserRole) => {
+    setNewUserRole(role);
+    if (role === 'ops_counter' || role === 'ops_supervisor') {
+      setNewUserStoreId('ALL');
+    } else if (newUserStoreId === 'ALL') {
+      setNewUserStoreId(stores[0]?.storeId || 'ST-101');
+    }
+  };
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,7 +155,10 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       return;
     }
 
-    const assignedStore = stores.find((s) => s.storeId === newUserStoreId) || stores[0];
+    const isAllStores = newUserStoreId === 'ALL';
+    const assignedStore = isAllStores ? null : stores.find((s) => s.storeId === newUserStoreId) || stores[0];
+    const resolvedStoreId = isAllStores ? 'ALL' : (assignedStore?.storeId || 'ST-101');
+    const resolvedStoreName = isAllStores ? 'All Stores (Operations)' : (assignedStore?.name || 'Downtown Flagship');
 
     setIsUserSubmitting(true);
     try {
@@ -154,14 +167,14 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         displayName: trimmedName,
         password: newPassword.trim() || 'password123',
         role: newUserRole,
-        assignedStoreId: assignedStore?.storeId || 'ST-101',
-        assignedStoreName: assignedStore?.name || 'Downtown Flagship',
+        assignedStoreId: resolvedStoreId,
+        assignedStoreName: resolvedStoreName,
         createdBy: currentUser.email || currentUser.displayName,
       });
       setManagedUsers(updated);
       onUsersUpdated?.(updated);
       setUserActionSuccess(
-        `User "${trimmedName}" (${newUserRole}) successfully provisioned and assigned to ${assignedStore?.name}.`
+        `User "${trimmedName}" (${newUserRole}) successfully provisioned for ${resolvedStoreName}.`
       );
       setIsAddUserModalOpen(false);
       setNewDisplayName('');
@@ -189,7 +202,8 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     setUserActionError(null);
     setUserActionSuccess(null);
 
-    const assignedStore = stores.find((s) => s.storeId === editUserStoreId) || stores[0];
+    const isAllStores = editUserStoreId === 'ALL';
+    const assignedStore = isAllStores ? null : stores.find((s) => s.storeId === editUserStoreId) || stores[0];
 
     setIsUserSubmitting(true);
     try {
@@ -198,8 +212,8 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         displayName: editDisplayName.trim() || userToEdit.displayName,
         password: editPassword.trim() || userToEdit.password,
         role: editUserRole,
-        assignedStoreId: assignedStore?.storeId || userToEdit.assignedStoreId,
-        assignedStoreName: assignedStore?.name || userToEdit.assignedStoreName,
+        assignedStoreId: isAllStores ? 'ALL' : (assignedStore?.storeId || userToEdit.assignedStoreId),
+        assignedStoreName: isAllStores ? 'All Stores (Operations)' : (assignedStore?.name || userToEdit.assignedStoreName),
       };
 
       const updated = await updateManagedUser(updatedUser);
@@ -1718,9 +1732,11 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   onChange={(e) => setUserRoleFilter(e.target.value as any)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
                 >
-                  <option value="all">All Roles (Counters, Supervisors, Admins)</option>
-                  <option value="counter">Counters Only</option>
-                  <option value="supervisor">Supervisors Only</option>
+                  <option value="all">All Roles (Store, Operations & Admin)</option>
+                  <option value="counter">Store Counters Only</option>
+                  <option value="ops_counter">Operations Counters Only</option>
+                  <option value="supervisor">Store Supervisors Only</option>
+                  <option value="ops_supervisor">Counter Supervisors (Ops) Only</option>
                   <option value="admin">Administrators Only</option>
                 </select>
               </div>
@@ -1733,6 +1749,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
                 >
                   <option value="all">All Assigned Stores</option>
+                  <option value="ALL">All Stores (Operations)</option>
                   {stores.map((s) => (
                     <option key={s.storeId} value={s.storeId}>
                       {s.name} ({s.storeId})
@@ -1758,18 +1775,26 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   <div className="space-y-2">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <h4 className="text-sm font-bold text-white leading-snug">{u.displayName}</h4>
                           <span
                             className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
                               u.role === 'admin'
                                 ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                : u.role === 'ops_supervisor'
+                                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
                                 : u.role === 'supervisor'
                                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                : u.role === 'ops_counter'
+                                ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
                                 : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                             }`}
                           >
-                            {u.role}
+                            {u.role === 'ops_counter'
+                              ? 'Ops Counter'
+                              : u.role === 'ops_supervisor'
+                              ? 'Counter Sup (Ops)'
+                              : u.role}
                           </span>
                         </div>
                         <div className="text-xs text-slate-400 font-mono mt-0.5 flex items-center gap-1.5">
@@ -1916,25 +1941,51 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setNewUserRole('counter')}
-                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                    onClick={() => handleSelectNewUserRole('counter')}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 ${
                       newUserRole === 'counter'
                         ? 'bg-emerald-600 border-emerald-500 text-white shadow'
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <span>Counter Associate</span>
+                    <span>Store Counter</span>
+                    <span className="text-[9px] font-normal opacity-80">1 store · Own counts</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setNewUserRole('supervisor')}
-                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                    onClick={() => handleSelectNewUserRole('ops_counter')}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 ${
+                      newUserRole === 'ops_counter'
+                        ? 'bg-teal-600 border-teal-500 text-white shadow'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>Ops Counter</span>
+                    <span className="text-[9px] font-normal opacity-80">Switch stores · Own counts</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectNewUserRole('supervisor')}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 ${
                       newUserRole === 'supervisor'
                         ? 'bg-amber-600 border-amber-500 text-white shadow'
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
                     <span>Store Supervisor</span>
+                    <span className="text-[9px] font-normal opacity-80">1 store · Add SKU</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectNewUserRole('ops_supervisor')}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-0.5 ${
+                      newUserRole === 'ops_supervisor'
+                        ? 'bg-cyan-600 border-cyan-500 text-white shadow'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <span>Counter Sup (Ops)</span>
+                    <span className="text-[9px] font-normal opacity-80">All counts · Add SKU</span>
                   </button>
                 </div>
               </div>
@@ -1949,6 +2000,9 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-xs text-white focus:border-amber-400 focus:outline-none"
                   required
                 >
+                  {(newUserRole === 'ops_counter' || newUserRole === 'ops_supervisor') && (
+                    <option value="ALL">All Stores (Operations — Multi-Store Access)</option>
+                  )}
                   {stores.map((s) => (
                     <option key={s.storeId} value={s.storeId}>
                       {s.name} ({s.storeId}) — {s.location}
@@ -1956,7 +2010,9 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   ))}
                 </select>
                 <span className="text-[10px] text-slate-500 mt-1 block">
-                  The user will be strictly locked to this store upon signing in.
+                  {newUserRole === 'ops_counter' || newUserRole === 'ops_supervisor'
+                    ? 'Operations staff can switch store locations while conducting physical counts.'
+                    : 'This store user will be strictly locked to the assigned store upon signing in.'}
                 </span>
               </div>
 
@@ -2039,11 +2095,21 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                 </label>
                 <select
                   value={editUserRole}
-                  onChange={(e) => setEditUserRole(e.target.value as any)}
+                  onChange={(e) => {
+                    const nextRole = e.target.value as UserRole;
+                    setEditUserRole(nextRole);
+                    if (nextRole === 'ops_counter' || nextRole === 'ops_supervisor') {
+                      setEditUserStoreId('ALL');
+                    } else if (editUserStoreId === 'ALL') {
+                      setEditUserStoreId(stores[0]?.storeId || 'ST-101');
+                    }
+                  }}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-xs text-white focus:border-amber-400 focus:outline-none"
                 >
-                  <option value="counter">Counter Associate</option>
-                  <option value="supervisor">Store Supervisor</option>
+                  <option value="counter">Store Counter (Assigned Store, Own Counts)</option>
+                  <option value="ops_counter">Operations Counter (Multi-Store, Own Counts)</option>
+                  <option value="supervisor">Store Supervisor (Assigned Store, Add SKU)</option>
+                  <option value="ops_supervisor">Counter Supervisor - Ops (All Stores & Counts, Add SKU)</option>
                   <option value="admin">Administrator</option>
                 </select>
               </div>
@@ -2057,6 +2123,9 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   onChange={(e) => setEditUserStoreId(e.target.value)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-xs text-white focus:border-amber-400 focus:outline-none"
                 >
+                  {(editUserRole === 'ops_counter' || editUserRole === 'ops_supervisor') && (
+                    <option value="ALL">All Stores (Operations — Multi-Store Access)</option>
+                  )}
                   {stores.map((s) => (
                     <option key={s.storeId} value={s.storeId}>
                       {s.name} ({s.storeId}) — {s.location}

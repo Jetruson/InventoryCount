@@ -6,18 +6,25 @@
 import React, { useState, useEffect } from 'react';
 import { auth } from './firebase/config';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { AppUser, Store, InventoryCount, Product } from './types/inventory';
+import { AppUser, Store, InventoryCount, Product, UserRole } from './types/inventory';
 import {
-  DEFAULT_STORES,
   getLocalStores,
   getStoredActiveStore,
   setStoredActiveStore,
-  fetchStores,
+  subscribeToStores,
   seedStoresIfEmpty,
 } from './services/storeService';
 import { seedUsersIfEmpty } from './services/userService';
-import { fetchAllCounts, subscribeToSyncStatus } from './services/offlineSyncService';
-import { fetchCatalog } from './services/catalogService';
+import {
+  subscribeToCounts,
+  subscribeToSyncStatus,
+  syncPendingCounts,
+} from './services/offlineSyncService';
+import {
+  fetchCatalog,
+  subscribeToCatalog,
+  seedCatalogIfEmpty,
+} from './services/catalogService';
 import { AuthScreen } from './components/AuthScreen';
 import { TopNav } from './components/TopNav';
 import { BottomNav, ActiveTab } from './components/BottomNav';
@@ -41,7 +48,16 @@ export default function App() {
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState<boolean>(false);
 
-  // Monitor Firebase Auth state or stored local counter session
+  // Subscribe to retail stores in real time (needed both before and after login)
+  useEffect(() => {
+    seedStoresIfEmpty();
+    const unsubStores = subscribeToStores((fetchedStores) => {
+      setStores(fetchedStores);
+    });
+    return () => unsubStores();
+  }, []);
+
+  // Monitor Firebase Auth state or stored local session
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
@@ -50,21 +66,24 @@ export default function App() {
           firebaseUser.email?.toLowerCase() === 'jetgonzalgo@gmail.com' ||
           firebaseUser.email?.toLowerCase().includes('admin');
         const isUserSupervisor = firebaseUser.email?.toLowerCase().includes('supervisor');
-        const resolvedRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
+        let resolvedRole: UserRole = isUserAdmin
           ? 'admin'
           : isUserSupervisor
           ? 'supervisor'
           : 'counter';
 
-        // Check local session storage for supervisor assignment metadata
+        // Check local session storage for assignment metadata
         let assignedStoreId: string | undefined = undefined;
         let assignedStoreName: string | undefined = undefined;
         try {
           const localSession = localStorage.getItem('inventory_count_session_user');
           if (localSession) {
             const parsed = JSON.parse(localSession);
-            assignedStoreId = parsed.assignedStoreId;
-            assignedStoreName = parsed.assignedStoreName;
+            if (parsed.uid === firebaseUser.uid || parsed.email === firebaseUser.email) {
+              assignedStoreId = parsed.assignedStoreId;
+              assignedStoreName = parsed.assignedStoreName;
+              if (parsed.role) resolvedRole = parsed.role;
+            }
           }
         } catch {
           // ignore error
@@ -78,15 +97,19 @@ export default function App() {
             (isUserAdmin ? 'Jet Gonzalgo' : firebaseUser.email?.split('@')[0]) ||
             'Store Associate',
           role: resolvedRole,
-          activeStoreId: assignedStoreId || storedStore.storeId,
+          activeStoreId:
+            assignedStoreId && assignedStoreId !== 'ALL' ? assignedStoreId : storedStore.storeId,
           assignedStoreId: assignedStoreId,
           assignedStoreName: assignedStoreName,
         };
 
         setCurrentUser(userObj);
 
-        // Lock supervisor immediately to their assigned store
-        if (resolvedRole === 'supervisor' && assignedStoreId) {
+        if (
+          (resolvedRole === 'counter' || resolvedRole === 'supervisor') &&
+          assignedStoreId &&
+          assignedStoreId !== 'ALL'
+        ) {
           const currentStores = getLocalStores();
           const matched = currentStores.find((s) => s.storeId === assignedStoreId);
           if (matched) {
@@ -95,13 +118,17 @@ export default function App() {
           }
         }
       } else {
-        // Check if there is an active local session
+        // Check if there is an active credential-provisioned local session
         try {
           const localSession = localStorage.getItem('inventory_count_session_user');
           if (localSession) {
             const parsed: AppUser = JSON.parse(localSession);
             setCurrentUser(parsed);
-            if (parsed.role === 'supervisor' && parsed.assignedStoreId) {
+            if (
+              (parsed.role === 'counter' || parsed.role === 'supervisor') &&
+              parsed.assignedStoreId &&
+              parsed.assignedStoreId !== 'ALL'
+            ) {
               const currentStores = getLocalStores();
               const matched = currentStores.find((s) => s.storeId === parsed.assignedStoreId);
               if (matched) {
@@ -122,45 +149,59 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Fetch stores, catalog, and counts
+  // Keep locked roles bound to their assigned store when stores list updates
   useEffect(() => {
-    if (currentUser) {
-      seedStoresIfEmpty();
-      seedUsersIfEmpty();
-      fetchStores().then((fetchedStores) => {
-        setStores(fetchedStores);
-        if (currentUser.role !== 'admin' && currentUser.assignedStoreId) {
-          const matched = fetchedStores.find((s) => s.storeId === currentUser.assignedStoreId);
-          if (matched) {
-            setActiveStore(matched);
-            setStoredActiveStore(matched);
-          }
-        }
-      });
-
-      fetchAllCounts().then((fetchedCounts) => {
-        setCounts(fetchedCounts);
-      });
-
-      fetchCatalog().then((fetchedCatalog) => {
-        setCatalog(fetchedCatalog);
-      });
-
-      const unsubSync = subscribeToSyncStatus((status) => {
-        setPendingSyncCount(status.pendingCount);
-        if (status.pendingCount === 0 && !status.isSyncing) {
-          // Refresh counts after sync
-          fetchAllCounts().then(setCounts);
-        }
-      });
-
-      return () => unsubSync();
+    if (
+      currentUser &&
+      (currentUser.role === 'counter' || currentUser.role === 'supervisor') &&
+      currentUser.assignedStoreId &&
+      currentUser.assignedStoreId !== 'ALL'
+    ) {
+      const matched = stores.find((s) => s.storeId === currentUser.assignedStoreId);
+      if (matched && matched.storeId !== activeStore.storeId) {
+        setActiveStore(matched);
+        setStoredActiveStore(matched);
+      }
     }
+  }, [currentUser, stores, activeStore.storeId]);
+
+  // Real-time cloud subscriptions for catalog, counts, and pending sync flushing
+  useEffect(() => {
+    if (!currentUser) return;
+
+    seedUsersIfEmpty();
+    seedCatalogIfEmpty();
+
+    // Immediately flush any pending offline counts from this device
+    if (navigator.onLine) {
+      syncPendingCounts();
+    }
+
+    const unsubCounts = subscribeToCounts((liveCounts) => {
+      setCounts(liveCounts);
+    });
+
+    const unsubCatalog = subscribeToCatalog((liveCatalog) => {
+      setCatalog(liveCatalog);
+    });
+
+    const unsubSync = subscribeToSyncStatus((status) => {
+      setPendingSyncCount(status.pendingCount);
+    });
+
+    return () => {
+      unsubCounts();
+      unsubCatalog();
+      unsubSync();
+    };
   }, [currentUser]);
 
   const handleSelectStore = (store: Store) => {
-    // Only administrators can switch stores. Counters and supervisors are locked to their assigned store.
-    if (currentUser?.role !== 'admin') {
+    const canSwitchStore =
+      currentUser?.role === 'admin' ||
+      currentUser?.role === 'ops_counter' ||
+      currentUser?.role === 'ops_supervisor';
+    if (!canSwitchStore) {
       return;
     }
     setActiveStore(store);
@@ -172,16 +213,20 @@ export default function App() {
       localStorage.removeItem('inventory_count_session_user');
       await signOut(auth);
       setCurrentUser(null);
+      setActiveTab('count');
     } catch (err) {
       console.error('Logout error:', err);
     }
   };
 
   const handleCountSaved = (newCount: InventoryCount) => {
-    setCounts((prev) => [newCount, ...prev]);
+    setCounts((prev) => {
+      const filtered = prev.filter((c) => c.id !== newCount.id);
+      return [newCount, ...filtered];
+    });
   };
 
-  // Loading state while verifying Firebase auth session
+  // Loading state while verifying auth session
   if (isAuthLoading) {
     return (
       <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-950 text-slate-100">
@@ -204,6 +249,7 @@ export default function App() {
           setCurrentUser(user);
           setActiveStore(selectedStore);
           setStoredActiveStore(selectedStore);
+          setActiveTab('count');
         }}
       />
     );
@@ -229,6 +275,7 @@ export default function App() {
           <CountScreen
             currentUser={currentUser}
             activeStore={activeStore}
+            catalog={catalog}
             onCountSaved={handleCountSaved}
           />
         )}
@@ -258,7 +305,6 @@ export default function App() {
             onCatalogUpdated={() => fetchCatalog().then(setCatalog)}
             onStoresUpdated={(updatedStores) => {
               setStores(updatedStores);
-              // If current active store was deleted, fall back to first store
               if (!updatedStores.some((s) => s.storeId === activeStore.storeId) && updatedStores.length > 0) {
                 setActiveStore(updatedStores[0]);
                 setStoredActiveStore(updatedStores[0]);
@@ -270,7 +316,8 @@ export default function App() {
         {activeTab === 'catalog' && (
           <CatalogScreen
             currentUser={currentUser}
-            onSelectProductForCount={(prod: Product) => {
+            catalog={catalog}
+            onSelectProductForCount={() => {
               setActiveTab('count');
             }}
           />

@@ -6,24 +6,20 @@ import {
   GoogleAuthProvider,
 } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
-import { Store, AppUser, ManagedUser } from '../types/inventory';
+import { Store, AppUser, ManagedUser, UserRole } from '../types/inventory';
 import { DEFAULT_STORES, setStoredActiveStore } from '../services/storeService';
 import {
   getLocalManagedUsers,
-  fetchManagedUsers,
+  subscribeToManagedUsers,
   findUserForAuth,
   seedUsersIfEmpty,
 } from '../services/userService';
 import {
   Barcode,
   Lock,
-  Mail,
   User,
   Building2,
   ArrowRight,
-  ShieldAlert,
-  ShieldCheck,
-  CheckCircle2,
   Info,
   Users,
 } from 'lucide-react';
@@ -31,6 +27,22 @@ import {
 interface AuthScreenProps {
   stores: Store[];
   onLoginSuccess: (user: AppUser, selectedStore: Store) => void;
+}
+
+function formatRoleBadge(role: UserRole): { label: string; className: string } {
+  switch (role) {
+    case 'admin':
+      return { label: 'Admin', className: 'bg-purple-500/20 text-purple-300' };
+    case 'ops_supervisor':
+      return { label: 'Counter Sup (Ops)', className: 'bg-cyan-500/20 text-cyan-300' };
+    case 'supervisor':
+      return { label: 'Store Sup', className: 'bg-amber-500/20 text-amber-300' };
+    case 'ops_counter':
+      return { label: 'Ops Counter', className: 'bg-teal-500/20 text-teal-300' };
+    case 'counter':
+    default:
+      return { label: 'Counter', className: 'bg-emerald-500/20 text-emerald-300' };
+  }
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }) => {
@@ -43,9 +55,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
 
   useEffect(() => {
     seedUsersIfEmpty();
-    fetchManagedUsers().then((users) => {
+    const unsub = subscribeToManagedUsers((users) => {
       setManagedUsers(users);
     });
+    return () => unsub();
   }, []);
 
   // Quick fill demo/provisioned account
@@ -65,23 +78,24 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
       const result = await signInWithPopup(auth, provider);
       const fbUser = result.user;
 
-      const isUserAdmin =
-        fbUser.email?.toLowerCase() === 'jetgonzalgo@gmail.com' ||
-        fbUser.email?.toLowerCase().includes('admin');
-      const isUserSupervisor = fbUser.email?.toLowerCase().includes('supervisor');
-
-      const resolvedRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
-        ? 'admin'
-        : isUserSupervisor
-        ? 'supervisor'
-        : 'counter';
-
-      // Check if this user is configured in managed users
       const managedMatch = managedUsers.find(
         (u) => u.username.toLowerCase() === (fbUser.email || '').toLowerCase()
       );
 
-      const targetStoreId = managedMatch?.assignedStoreId || availableStores[0].storeId;
+      const isUserAdmin =
+        fbUser.email?.toLowerCase() === 'jetgonzalgo@gmail.com' ||
+        fbUser.email?.toLowerCase().includes('admin') ||
+        managedMatch?.role === 'admin';
+      const isUserSupervisor = fbUser.email?.toLowerCase().includes('supervisor');
+
+      const resolvedRole: UserRole =
+        managedMatch?.role ||
+        (isUserAdmin ? 'admin' : isUserSupervisor ? 'supervisor' : 'counter');
+
+      const targetStoreId =
+        managedMatch?.assignedStoreId && managedMatch.assignedStoreId !== 'ALL'
+          ? managedMatch.assignedStoreId
+          : availableStores[0].storeId;
       const targetStore =
         availableStores.find((s) => s.storeId === targetStoreId) || availableStores[0];
 
@@ -99,8 +113,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
             username: resolvedName,
             email: fbUser.email || '',
             role: resolvedRole,
-            assignedStoreId: targetStore.storeId,
-            assignedStoreName: targetStore.name,
+            assignedStoreId: managedMatch?.assignedStoreId || targetStore.storeId,
+            assignedStoreName: managedMatch?.assignedStoreName || targetStore.name,
             updatedAt: new Date().toISOString(),
           },
           { merge: true }
@@ -116,15 +130,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
         displayName: resolvedName,
         role: resolvedRole,
         activeStoreId: targetStore.storeId,
-        assignedStoreId: targetStore.storeId,
-        assignedStoreName: targetStore.name,
+        assignedStoreId: managedMatch?.assignedStoreId || targetStore.storeId,
+        assignedStoreName: managedMatch?.assignedStoreName || targetStore.name,
       };
 
       localStorage.setItem('inventory_count_session_user', JSON.stringify(appUser));
       onLoginSuccess(appUser, targetStore);
     } catch (err: any) {
-      console.warn('Google sign in error:', err.message);
-      setErrorMessage(err.message || 'Google sign in failed. Please try Username/Password.');
+      console.warn('Google sign in error:', err.code, err.message);
+      if (err?.code === 'auth/unauthorized-domain') {
+        setErrorMessage(
+          'Google Sign-In is blocked for this domain until added in Firebase Console (Auth > Settings > Authorized Domains). You can sign in directly below using your Admin email & password.'
+        );
+      } else {
+        setErrorMessage(err.message || 'Google sign in failed. Please try Username/Password below.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -147,8 +167,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
     setIsLoading(true);
 
     try {
-      // 1. Look up in Admin-provisioned Managed Users
-      const matchedManaged = findUserForAuth(inputId, password.trim());
+      // 1. Look up in Admin-provisioned Managed Users (cloud-synced)
+      const matchedManaged = findUserForAuth(inputId, password.trim(), managedUsers);
 
       if (matchedManaged) {
         if (!matchedManaged.isActive) {
@@ -157,10 +177,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
           return;
         }
 
-        // Find assigned store
         const designatedStore =
-          availableStores.find((s) => s.storeId === matchedManaged.assignedStoreId) ||
-          availableStores[0];
+          matchedManaged.assignedStoreId === 'ALL'
+            ? availableStores[0]
+            : availableStores.find((s) => s.storeId === matchedManaged.assignedStoreId) ||
+              availableStores[0];
 
         const sessionUser: AppUser = {
           uid: matchedManaged.id,
@@ -170,8 +191,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
           displayName: matchedManaged.displayName,
           role: matchedManaged.role,
           activeStoreId: designatedStore.storeId,
-          assignedStoreId: designatedStore.storeId,
-          assignedStoreName: designatedStore.name,
+          assignedStoreId: matchedManaged.assignedStoreId,
+          assignedStoreName: matchedManaged.assignedStoreName,
         };
 
         localStorage.setItem('inventory_count_session_user', JSON.stringify(sessionUser));
@@ -188,7 +209,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
             inputId.toLowerCase() === 'jetgonzalgo@gmail.com' ||
             inputId.toLowerCase().includes('admin');
           const isUserSupervisor = inputId.toLowerCase().includes('supervisor');
-          const fallbackRole: 'counter' | 'supervisor' | 'admin' = isUserAdmin
+          const fallbackRole: UserRole = isUserAdmin
             ? 'admin'
             : isUserSupervisor
             ? 'supervisor'
@@ -220,7 +241,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
         }
       }
 
-      // Check if user is trying admin email without match
+      // 3. Fallback primary admin login
       if (inputId.toLowerCase() === 'jetgonzalgo@gmail.com' || inputId.toLowerCase() === 'admin') {
         const adminStore = availableStores[0];
         const adminUser: AppUser = {
@@ -238,9 +259,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
         return;
       }
 
-      // If user was not found
       setErrorMessage(
-        'Account not found. User accounts are created exclusively by the Administrator. Please contact your Admin or click a Quick Access account below.'
+        'Invalid credentials or account not found. User accounts are provisioned by the Administrator.'
       );
     } catch (err: any) {
       setErrorMessage(err.message || 'Authentication failed. Please verify credentials.');
@@ -272,7 +292,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
             <span>Administrator-Managed Access</span>
           </div>
           <p className="text-slate-400 text-[11px] leading-relaxed">
-            User accounts and store branch assignments are provisioned exclusively by System Administrators. Counters and Supervisors are automatically locked to their assigned store.
+            Store staff stay locked to their assigned branch. Operations Counters & Counter Supervisors can switch store locations while conducting physical counts.
           </p>
         </div>
 
@@ -286,9 +306,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
             <span className="text-[10px] text-slate-400">1-Tap Fill</span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {managedUsers.slice(0, 4).map((u) => {
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-0.5">
+            {managedUsers.slice(0, 6).map((u) => {
               const isSelected = usernameOrEmail === u.username;
+              const badge = formatRoleBadge(u.role);
               return (
                 <button
                   key={u.id}
@@ -305,15 +326,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
                       {u.displayName.split(' ')[0]} {u.displayName.split(' ')[1] || ''}
                     </span>
                     <span
-                      className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${
-                        u.role === 'admin'
-                          ? 'bg-purple-500/20 text-purple-300'
-                          : u.role === 'supervisor'
-                          ? 'bg-amber-500/20 text-amber-300'
-                          : 'bg-emerald-500/20 text-emerald-300'
-                      }`}
+                      className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 ${badge.className}`}
                     >
-                      {u.role}
+                      {badge.label}
                     </span>
                   </div>
                   <div className="text-[10px] text-slate-400 truncate mt-1 flex items-center gap-1">
@@ -369,7 +384,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
                   type="text"
                   value={usernameOrEmail}
                   onChange={(e) => setUsernameOrEmail(e.target.value)}
-                  placeholder="e.g. counter.flagship or email"
+                  placeholder="e.g. ops.counter or counter.flagship"
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 pl-10 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
                   required
                 />
@@ -401,7 +416,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
               disabled={isLoading}
               className="w-full h-11 rounded-xl bg-emerald-600 text-xs font-bold text-white shadow-xl shadow-emerald-950 hover:bg-emerald-500 active:scale-98 transition flex items-center justify-center gap-2 disabled:opacity-50 mt-1"
             >
-              <span>{isLoading ? 'Verifying Credentials...' : 'Sign In to Designated Store'}</span>
+              <span>{isLoading ? 'Verifying Credentials...' : 'Sign In'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

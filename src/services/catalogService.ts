@@ -1,6 +1,14 @@
 import { Product, MasterlistItem } from '../types/inventory';
 import { db } from '../firebase/config';
-import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import {
+  collection,
+  getDocs,
+  doc,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+  writeBatch,
+} from 'firebase/firestore';
 
 export const SEED_PRODUCTS: Product[] = [
   {
@@ -96,29 +104,76 @@ export const SEED_PRODUCTS: Product[] = [
 ];
 
 const LOCAL_CATALOG_KEY = 'inventory_count_local_catalog';
+const LOCAL_CATALOG_CUSTOMIZED_KEY = 'inventory_count_catalog_customized';
+
+function parseProductDoc(id: string, d: Record<string, any>): Product {
+  return {
+    id,
+    sku: String(d.sku || id),
+    barcode: String(d.barcode || d.sku || id),
+    description: String(d.description || 'Product Item'),
+    category: String(d.category || 'General'),
+    unit: String(d.unit || 'pcs'),
+    systemStock: typeof d.systemStock === 'number' ? d.systemStock : Number(d.systemStock) || 0,
+  };
+}
+
+function makeProductDocId(sku: string): string {
+  const sanitized = sku.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase().slice(0, 110);
+  return `prod-${sanitized || Date.now()}`;
+}
 
 export function getLocalCatalog(): Product[] {
   try {
     const raw = localStorage.getItem(LOCAL_CATALOG_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+      if (Array.isArray(parsed)) {
+        // Respect explicitly empty customized catalog
+        if (parsed.length > 0 || localStorage.getItem(LOCAL_CATALOG_CUSTOMIZED_KEY) === 'true') {
+          return parsed;
+        }
       }
     }
   } catch (e) {
     console.warn('Could not read local catalog:', e);
   }
-  // Initialize with seed
   saveLocalCatalog(SEED_PRODUCTS);
   return SEED_PRODUCTS;
 }
 
-export function saveLocalCatalog(products: Product[]): void {
+export function saveLocalCatalog(products: Product[], markCustomized = false): void {
   try {
     localStorage.setItem(LOCAL_CATALOG_KEY, JSON.stringify(products));
+    if (markCustomized) {
+      localStorage.setItem(LOCAL_CATALOG_CUSTOMIZED_KEY, 'true');
+    }
   } catch (e) {
     console.warn('Could not save local catalog:', e);
+  }
+}
+
+export async function seedCatalogIfEmpty(): Promise<void> {
+  try {
+    if (localStorage.getItem(LOCAL_CATALOG_CUSTOMIZED_KEY) === 'true') return;
+    const snapshot = await getDocs(collection(db, 'products'));
+    if (snapshot.empty) {
+      const batch = writeBatch(db);
+      for (const p of SEED_PRODUCTS) {
+        batch.set(doc(db, 'products', p.id), {
+          sku: p.sku,
+          barcode: p.barcode,
+          description: p.description,
+          category: p.category,
+          unit: p.unit,
+          systemStock: p.systemStock ?? 0,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      await batch.commit();
+    }
+  } catch (e) {
+    console.warn('Catalog seeding skipped or offline:', e);
   }
 }
 
@@ -128,24 +183,12 @@ export async function fetchCatalog(): Promise<Product[]> {
     if (!snapshot.empty) {
       const firestoreProducts: Product[] = [];
       snapshot.forEach(docSnap => {
-        const d = docSnap.data();
-        firestoreProducts.push({
-          id: docSnap.id,
-          sku: d.sku,
-          barcode: d.barcode,
-          description: d.description,
-          category: d.category || 'General',
-          unit: d.unit || 'pcs',
-          systemStock: d.systemStock ?? 0,
-        });
+        firestoreProducts.push(parseProductDoc(docSnap.id, docSnap.data()));
       });
-      // Merge with seed and update local cache
-      const mergedMap = new Map<string, Product>();
-      SEED_PRODUCTS.forEach(p => mergedMap.set(p.sku, p));
-      firestoreProducts.forEach(p => mergedMap.set(p.sku, p));
-      const combined = Array.from(mergedMap.values());
-      saveLocalCatalog(combined);
-      return combined;
+      // Firestore is the authoritative shared source across devices
+      firestoreProducts.sort((a, b) => a.sku.localeCompare(b.sku));
+      saveLocalCatalog(firestoreProducts, true);
+      return firestoreProducts;
     }
   } catch (e) {
     console.warn('Network offline or error fetching products from Firestore. Using cached catalog:', e);
@@ -153,19 +196,52 @@ export async function fetchCatalog(): Promise<Product[]> {
   return getLocalCatalog();
 }
 
+/**
+ * Subscribes to live Firestore product catalog updates across all devices.
+ */
+export function subscribeToCatalog(onUpdate: (products: Product[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'products'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const firestoreProducts: Product[] = [];
+          snapshot.forEach(docSnap => {
+            firestoreProducts.push(parseProductDoc(docSnap.id, docSnap.data()));
+          });
+          firestoreProducts.sort((a, b) => a.sku.localeCompare(b.sku));
+          saveLocalCatalog(firestoreProducts, true);
+          onUpdate(firestoreProducts);
+        } else {
+          // If Firestore is empty and user previously cleared, return [] or seed fallback
+          onUpdate(getLocalCatalog());
+        }
+      },
+      (err) => {
+        console.warn('Realtime catalog listener error:', err);
+        onUpdate(getLocalCatalog());
+      }
+    );
+  } catch (err) {
+    console.warn('Could not attach realtime catalog listener:', err);
+    onUpdate(getLocalCatalog());
+    return () => {};
+  }
+}
+
 export async function addProductToCatalog(product: Omit<Product, 'id'>): Promise<Product> {
-  const newId = `prod-${Date.now()}`;
+  const newId = makeProductDocId(product.sku || `${Date.now()}`);
   const newProduct: Product = {
     ...product,
     id: newId,
   };
 
-  // 1. Immediately persist to local cache so barcode lookup succeeds instantly
+  // 1. Immediately persist to local cache
   const current = getLocalCatalog();
   const updated = [newProduct, ...current.filter(p => p.sku !== product.sku && p.barcode !== product.barcode)];
-  saveLocalCatalog(updated);
+  saveLocalCatalog(updated, true);
 
-  // 2. Persist to Firestore if online
+  // 2. Persist to Firestore
   try {
     await setDoc(doc(db, 'products', newId), {
       sku: product.sku,
@@ -173,10 +249,11 @@ export async function addProductToCatalog(product: Omit<Product, 'id'>): Promise
       description: product.description,
       category: product.category || 'General',
       unit: product.unit || 'pcs',
+      systemStock: product.systemStock ?? 0,
       createdAt: new Date().toISOString(),
     });
   } catch (e) {
-    console.warn('Offline: Product saved to local catalog and will be available locally.', e);
+    console.warn('Offline: Product saved to local catalog.', e);
   }
 
   return newProduct;
@@ -185,7 +262,7 @@ export async function addProductToCatalog(product: Omit<Product, 'id'>): Promise
 export function findProductByCode(code: string, catalog: Product[]): Product | null {
   if (!code) return null;
   const cleanCode = code.trim().toLowerCase();
-  
+
   // Exact match on barcode
   const byBarcode = catalog.find(p => p.barcode.toLowerCase() === cleanCode);
   if (byBarcode) return byBarcode;
@@ -195,16 +272,16 @@ export function findProductByCode(code: string, catalog: Product[]): Product | n
   if (bySku) return bySku;
 
   // Partial match fallback
-  const partial = catalog.find(p => 
-    p.barcode.toLowerCase().includes(cleanCode) || 
+  const partial = catalog.find(p =>
+    p.barcode.toLowerCase().includes(cleanCode) ||
     p.sku.toLowerCase().includes(cleanCode)
   );
   return partial || null;
 }
 
 /**
- * Bulk imports an item masterlist into local cache and Firestore.
- * Supports 'merge' (upserts products) or 'replace' (replaces entire catalog).
+ * Bulk imports an item masterlist into local cache and Firestore using awaited chunked writeBatch.
+ * Supports 'merge' (upserts products) or 'replace' (deletes old products in Firestore and writes new ones).
  */
 export async function bulkImportMasterlist(
   items: MasterlistItem[],
@@ -217,7 +294,6 @@ export async function bulkImportMasterlist(
   const existing = mode === 'replace' ? [] : getLocalCatalog();
   const productMap = new Map<string, Product>();
 
-  // If merging, seed the map with existing items
   if (mode === 'merge') {
     existing.forEach((p) => productMap.set(p.sku.toLowerCase(), p));
   }
@@ -225,7 +301,7 @@ export async function bulkImportMasterlist(
   let successCount = 0;
   let errorCount = 0;
 
-  const newProductsList: Product[] = [];
+  const newProductsMap = new Map<string, Product>();
 
   for (const item of items) {
     const sku = (item.sku || '').trim();
@@ -237,42 +313,65 @@ export async function bulkImportMasterlist(
       continue;
     }
 
-    const docId = `prod-${sku.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase()}`;
+    const docId = makeProductDocId(sku);
     const product: Product = {
       id: docId,
       sku,
       barcode,
-      description,
+      description: description.slice(0, 290),
       category: (item.category || 'General').trim(),
       unit: (item.unit || 'pcs').trim(),
       systemStock: typeof item.systemStock === 'number' && !isNaN(item.systemStock) ? item.systemStock : 0,
     };
 
     productMap.set(sku.toLowerCase(), product);
-    newProductsList.push(product);
+    newProductsMap.set(docId, product);
     successCount++;
   }
 
+  const newProductsList = Array.from(newProductsMap.values());
   const finalCatalog = Array.from(productMap.values());
-  saveLocalCatalog(finalCatalog);
+  saveLocalCatalog(finalCatalog, true);
 
-  // Sync to Firestore in background
-  try {
-    for (const prod of newProductsList) {
-      setDoc(doc(db, 'products', prod.id), {
-        sku: prod.sku,
-        barcode: prod.barcode,
-        description: prod.description,
-        category: prod.category,
-        unit: prod.unit,
-        systemStock: prod.systemStock,
-        updatedAt: new Date().toISOString(),
-      }).catch((err) => {
-        console.warn(`Firestore sync note for product ${prod.sku}:`, err.message);
-      });
+  // Sync to Firestore using awaited chunked writeBatch (max 400 ops per batch)
+  const ops: Array<{ type: 'set' | 'delete'; id: string; data?: Product }> = [];
+
+  if (mode === 'replace') {
+    const existingSnap = await getDocs(collection(db, 'products'));
+    const newIds = new Set(newProductsList.map((p) => p.id));
+    existingSnap.forEach((docSnap) => {
+      if (!newIds.has(docSnap.id)) {
+        ops.push({ type: 'delete', id: docSnap.id });
+      }
+    });
+  }
+
+  for (const prod of newProductsList) {
+    ops.push({ type: 'set', id: prod.id, data: prod });
+  }
+
+  const CHUNK_SIZE = 400;
+  const nowIso = new Date().toISOString();
+  for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+    const chunk = ops.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+    for (const op of chunk) {
+      const ref = doc(db, 'products', op.id);
+      if (op.type === 'delete') {
+        batch.delete(ref);
+      } else if (op.data) {
+        batch.set(ref, {
+          sku: op.data.sku,
+          barcode: op.data.barcode,
+          description: op.data.description,
+          category: op.data.category,
+          unit: op.data.unit,
+          systemStock: op.data.systemStock ?? 0,
+          updatedAt: nowIso,
+        });
+      }
     }
-  } catch (err) {
-    console.warn('Firestore bulk sync queued in local cache:', err);
+    await batch.commit();
   }
 
   return { successCount, errorCount };
@@ -284,7 +383,7 @@ export async function bulkImportMasterlist(
 export async function deleteProductFromCatalog(productId: string): Promise<void> {
   const current = getLocalCatalog();
   const filtered = current.filter((p) => p.id !== productId);
-  saveLocalCatalog(filtered);
+  saveLocalCatalog(filtered, true);
 
   try {
     await deleteDoc(doc(db, 'products', productId));
@@ -294,8 +393,19 @@ export async function deleteProductFromCatalog(productId: string): Promise<void>
 }
 
 /**
- * Clears the catalog from local cache and resets with seed or empty
+ * Clears the catalog from local cache and Firestore.
  */
 export async function clearAllProducts(): Promise<void> {
-  saveLocalCatalog([]);
+  saveLocalCatalog([], true);
+  try {
+    const snapshot = await getDocs(collection(db, 'products'));
+    const docs = snapshot.docs;
+    for (let i = 0; i < docs.length; i += 400) {
+      const batch = writeBatch(db);
+      docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
+  } catch (e) {
+    console.warn('Failed clearing products in Firestore:', e);
+  }
 }

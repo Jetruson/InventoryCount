@@ -27,15 +27,19 @@ import {
 interface CountScreenProps {
   currentUser: AppUser;
   activeStore: Store;
+  catalog?: Product[];
   onCountSaved: (savedCount: InventoryCount) => void;
 }
 
 export const CountScreen: React.FC<CountScreenProps> = ({
   currentUser,
   activeStore,
+  catalog: externalCatalog,
   onCountSaved,
 }) => {
-  const [catalog, setCatalog] = useState<Product[]>([]);
+  const [catalog, setCatalog] = useState<Product[]>(() =>
+    externalCatalog && externalCatalog.length > 0 ? externalCatalog : getLocalCatalog()
+  );
   const [useCamera, setUseCamera] = useState<boolean>(true);
   const [barcodeInput, setBarcodeInput] = useState<string>('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -46,6 +50,11 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
+  const canAddSku =
+    currentUser.role === 'supervisor' ||
+    currentUser.role === 'ops_supervisor' ||
+    currentUser.role === 'admin';
+
   // Sticky location state retained across multiple counted items
   const [currentLocation, setCurrentLocation] = useState<string>(() => {
     return localStorage.getItem('inventory_count_active_location') || 'Aisle 1 - Shelf A';
@@ -53,10 +62,14 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   const [itemsInLocationCount, setItemsInLocationCount] = useState<number>(0);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
 
-  // Load catalog on mount
+  // Sync catalog whenever App.tsx pushes a real-time Firestore catalog update
   useEffect(() => {
-    setCatalog(getLocalCatalog());
-  }, []);
+    if (externalCatalog && externalCatalog.length > 0) {
+      setCatalog(externalCatalog);
+    } else if (!externalCatalog) {
+      setCatalog(getLocalCatalog());
+    }
+  }, [externalCatalog]);
 
   // Handle scanned or entered barcode
   const handleBarcodeIdentified = (code: string) => {
@@ -263,7 +276,7 @@ export const CountScreen: React.FC<CountScreenProps> = ({
             <span className="leading-relaxed font-medium">{validationError}</span>
           </div>
           {barcodeInput && !selectedProduct && (
-            currentUser.role !== 'counter' ? (
+            canAddSku ? (
               <button
                 onClick={() => setIsAddModalOpen(true)}
                 className="mt-1 self-start flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-500 active:scale-95 transition"

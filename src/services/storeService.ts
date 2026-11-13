@@ -1,6 +1,6 @@
 import { Store } from '../types/inventory';
 import { db } from '../firebase/config';
-import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 export const DEFAULT_STORES: Store[] = [
   { storeId: 'ST-101', name: 'Downtown Flagship', location: '100 Main Street' },
@@ -70,6 +70,7 @@ export async function fetchStores(): Promise<Store[]> {
           location: data.location || '',
         });
       });
+      stores.sort((a, b) => a.storeId.localeCompare(b.storeId));
       saveLocalStores(stores);
       return stores;
     }
@@ -77,6 +78,40 @@ export async function fetchStores(): Promise<Store[]> {
     console.warn('Network offline or error fetching stores from Firestore. Using local stores cache:', e);
   }
   return getLocalStores();
+}
+
+export function subscribeToStores(onUpdate: (stores: Store[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'stores'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const stores: Store[] = [];
+          snapshot.forEach(docSnap => {
+            const data = docSnap.data();
+            stores.push({
+              storeId: data.storeId || docSnap.id,
+              name: data.name,
+              location: data.location || '',
+            });
+          });
+          stores.sort((a, b) => a.storeId.localeCompare(b.storeId));
+          saveLocalStores(stores);
+          onUpdate(stores);
+        } else {
+          onUpdate(getLocalStores());
+        }
+      },
+      (err) => {
+        console.warn('Realtime stores listener error:', err);
+        onUpdate(getLocalStores());
+      }
+    );
+  } catch (err) {
+    console.warn('Could not attach realtime stores listener:', err);
+    onUpdate(getLocalStores());
+    return () => {};
+  }
 }
 
 export async function seedStoresIfEmpty(): Promise<void> {

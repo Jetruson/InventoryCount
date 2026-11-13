@@ -140,8 +140,8 @@
         },
         "role": {
           "type": "string",
-          "enum": ["counter", "supervisor", "admin"],
-          "description": "User role: counter, supervisor, or admin"
+          "enum": ["counter", "ops_counter", "supervisor", "ops_supervisor", "admin"],
+          "description": "User role: counter, ops_counter, supervisor, ops_supervisor, or admin"
         },
         "defaultStore": {
           "type": "string",
@@ -173,7 +173,7 @@
         },
         "role": {
           "type": "string",
-          "enum": ["counter", "supervisor", "admin"],
+          "enum": ["counter", "ops_counter", "supervisor", "ops_supervisor", "admin"],
           "description": "Assigned role"
         },
         "assignedStoreId": {

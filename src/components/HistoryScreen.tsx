@@ -3,16 +3,12 @@ import { InventoryCount, Store, AppUser } from '../types/inventory';
 import {
   Calendar,
   Search,
-  Filter,
   CheckCircle2,
   Clock,
-  ChevronDown,
   Layers,
-  ArrowUpDown,
-  FileSpreadsheet,
   MapPin,
   Building2,
-  Shield,
+  UserCheck,
 } from 'lucide-react';
 
 interface HistoryScreenProps {
@@ -22,10 +18,15 @@ interface HistoryScreenProps {
 }
 
 export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStore, currentUser }) => {
-  const isAdmin = currentUser?.role === 'admin';
+  const role = currentUser?.role || 'counter';
+  const isCounterRole = role === 'counter' || role === 'ops_counter';
+  const canSwitchStores = role === 'admin' || role === 'ops_supervisor' || role === 'ops_counter';
+
   const [skuFilter, setSkuFilter] = useState('');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'yesterday' | 'week'>('all');
-  const [storeFilter, setStoreFilter] = useState<'all' | 'current'>(isAdmin ? 'all' : 'current');
+  const [storeFilter, setStoreFilter] = useState<'all' | 'current'>(
+    canSwitchStores ? 'all' : 'current'
+  );
 
   const todayStr = new Date().toISOString().split('T')[0];
   const yesterday = new Date();
@@ -35,23 +36,35 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
   const oneWeekAgo = new Date();
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
-  // Filter counts
+  // Filter counts strictly by role permissions
   const filteredCounts = useMemo(() => {
-    return counts.filter(item => {
-      // For counters and supervisors: strictly lock to designated store
-      if (!isAdmin) {
+    return counts.filter((item) => {
+      // 1. Counters (Store Counter & Operations Counter) only see their OWN counts
+      if (isCounterRole && currentUser) {
+        const matchesUserId = item.userId === currentUser.uid;
+        const matchesUsername =
+          item.username &&
+          currentUser.displayName &&
+          item.username.toLowerCase() === currentUser.displayName.toLowerCase();
+        if (!matchesUserId && !matchesUsername) {
+          return false;
+        }
+      }
+
+      // 2. Store scope filtering
+      if (!canSwitchStores) {
+        // Store Counter & Store Supervisor are strictly locked to their designated branch
         const matchesDesignated =
           item.storeId === activeStore.storeId ||
           item.store.toLowerCase() === activeStore.name.toLowerCase();
         if (!matchesDesignated) return false;
       } else if (storeFilter === 'current') {
-        // Admin selected current store filter
         if (item.storeId !== activeStore.storeId && item.store !== activeStore.name) {
           return false;
         }
       }
 
-      // SKU / description / location match
+      // 3. SKU / description / location match
       if (skuFilter.trim()) {
         const query = skuFilter.trim().toLowerCase();
         const matchesSku = item.sku.toLowerCase().includes(query);
@@ -61,7 +74,7 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
         if (!matchesSku && !matchesDesc && !matchesBarcode && !matchesLoc) return false;
       }
 
-      // Date filter
+      // 4. Date filter
       if (dateFilter === 'today') {
         return item.date === todayStr;
       } else if (dateFilter === 'yesterday') {
@@ -73,7 +86,19 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
 
       return true;
     });
-  }, [counts, skuFilter, dateFilter, storeFilter, activeStore, isAdmin, todayStr, yesterdayStr, oneWeekAgo]);
+  }, [
+    counts,
+    skuFilter,
+    dateFilter,
+    storeFilter,
+    activeStore,
+    isCounterRole,
+    canSwitchStores,
+    currentUser,
+    todayStr,
+    yesterdayStr,
+    oneWeekAgo,
+  ]);
 
   const totalCountedUnits = useMemo(() => {
     return filteredCounts.reduce((acc, curr) => acc + (Number(curr.countedQuantity) || 0), 0);
@@ -84,7 +109,15 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
       {/* Header Summary Strip */}
       <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-md flex items-center justify-between">
         <div>
-          <span className="text-xs text-slate-400 font-medium">History Submissions</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 font-medium">History Submissions</span>
+            {isCounterRole && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 border border-emerald-500/25 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">
+                <UserCheck className="w-3 h-3" />
+                My Counts Only
+              </span>
+            )}
+          </div>
           <div className="flex items-baseline gap-2 mt-0.5">
             <span className="text-2xl font-black text-white tabular-nums">{filteredCounts.length}</span>
             <span className="text-xs text-slate-400">records</span>
@@ -106,7 +139,7 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
             type="text"
             value={skuFilter}
             onChange={(e) => setSkuFilter(e.target.value)}
-            placeholder="Filter by SKU, description, barcode..."
+            placeholder="Filter by SKU, description, barcode, location..."
             className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 pl-9 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
           />
           <Search className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
@@ -140,23 +173,23 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
         {/* Store Scope Toggle */}
         <div className="flex items-center gap-2 pt-1 border-t border-slate-800/80 text-xs">
           <span className="text-slate-400 text-[11px] font-semibold">Store:</span>
-          {isAdmin ? (
+          {canSwitchStores ? (
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setStoreFilter('all')}
                 className={`rounded-md px-2 py-1 text-xs transition ${
                   storeFilter === 'all'
-                    ? 'bg-purple-600 text-white font-semibold shadow'
+                    ? 'bg-emerald-600 text-white font-semibold shadow'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                All Stores
+                {role === 'ops_counter' ? 'All My Counts' : 'All Stores'}
               </button>
               <button
                 onClick={() => setStoreFilter('current')}
                 className={`rounded-md px-2 py-1 text-xs transition ${
                   storeFilter === 'current'
-                    ? 'bg-purple-600 text-white font-semibold shadow'
+                    ? 'bg-emerald-600 text-white font-semibold shadow'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -182,7 +215,9 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
             <Layers className="w-10 h-10 text-slate-600 mx-auto mb-2" />
             <p className="text-sm font-semibold text-slate-300">No count records found</p>
             <p className="text-xs text-slate-500 mt-1">
-              Try adjusting your SKU search or date filters above.
+              {isCounterRole
+                ? 'Your personal count submissions will appear here.'
+                : 'Try adjusting your SKU search or date filters above.'}
             </p>
           </div>
         ) : (

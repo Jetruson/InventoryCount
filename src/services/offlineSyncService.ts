@@ -1,6 +1,15 @@
 import { InventoryCount } from '../types/inventory';
-import { db, auth, handleFirestoreError, OperationType } from '../firebase/config';
-import { collection, doc, setDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { db } from '../firebase/config';
+import {
+  collection,
+  doc,
+  setDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
 
 const LOCAL_COUNTS_KEY = 'inventory_counts_local_history';
 const PENDING_QUEUE_KEY = 'inventory_counts_pending_sync_queue';
@@ -54,12 +63,14 @@ export type SyncCallback = (status: {
 
 const listeners: Set<SyncCallback> = new Set();
 let isSyncing = false;
+let lastSyncError: string | null = null;
 
 export function subscribeToSyncStatus(cb: SyncCallback): () => void {
   listeners.add(cb);
   cb({
     pendingCount: getPendingQueue().length,
     isSyncing,
+    error: lastSyncError,
   });
   return () => {
     listeners.delete(cb);
@@ -67,6 +78,7 @@ export function subscribeToSyncStatus(cb: SyncCallback): () => void {
 }
 
 function notifyListeners(error: string | null = null) {
+  lastSyncError = error;
   const pending = getPendingQueue().length;
   listeners.forEach(cb => cb({
     pendingCount: pending,
@@ -74,6 +86,38 @@ function notifyListeners(error: string | null = null) {
     lastSyncedAt: Date.now(),
     error,
   }));
+}
+
+function mergeWithPendingQueue(firestoreItems: InventoryCount[]): InventoryCount[] {
+  const pending = getPendingQueue();
+  const map = new Map<string, InventoryCount>();
+
+  firestoreItems.forEach(item => map.set(item.id, item));
+  pending.forEach(item => map.set(item.id, { ...item, syncStatus: 'pending' }));
+
+  const merged = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
+  saveLocalCounts(merged);
+  return merged;
+}
+
+function parseCountDoc(id: string, d: Record<string, any>): InventoryCount {
+  return {
+    id,
+    username: d.username || 'Associate',
+    userId: d.userId || '',
+    store: d.store || '',
+    storeId: d.storeId || '',
+    sku: d.sku || '',
+    barcode: d.barcode || '',
+    itemDescription: d.itemDescription || '',
+    countedQuantity: Number(d.countedQuantity) || 0,
+    remarks: d.remarks || '',
+    location: d.location || '',
+    date: d.date || '',
+    time: d.time || '',
+    createdAt: typeof d.createdAt === 'number' ? d.createdAt : Date.now(),
+    syncStatus: 'synced',
+  };
 }
 
 /**
@@ -101,46 +145,42 @@ export async function recordCount(countData: Omit<InventoryCount, 'id' | 'create
   savePendingQueue([...currentQueue, newCount]);
   notifyListeners();
 
-  // 3. Try flushing immediately if online
-  if (typeof navigator !== 'undefined' && navigator.onLine) {
-    syncPendingCounts();
+  // 3. Try flushing immediately if online (works for both Google & credential-logged sessions)
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    await syncPendingCounts();
   }
 
-  return newCount;
+  return getLocalCounts().find(c => c.id === id) || newCount;
 }
 
 /**
  * Synchronizes all pending count records with Firestore
  */
-export async function syncPendingCounts(): Promise<{ synced: number; remaining: number }> {
-  if (isSyncing) return { synced: 0, remaining: getPendingQueue().length };
+export async function syncPendingCounts(): Promise<{ synced: number; remaining: number; error?: string | null }> {
+  if (isSyncing) return { synced: 0, remaining: getPendingQueue().length, error: lastSyncError };
   const queue = getPendingQueue();
-  if (queue.length === 0) return { synced: 0, remaining: 0 };
-
-  // Wait until user is authenticated with Firebase before syncing to Firestore
-  if (!auth.currentUser) {
-    return { synced: 0, remaining: queue.length };
-  }
+  if (queue.length === 0) return { synced: 0, remaining: 0, error: null };
 
   isSyncing = true;
-  notifyListeners();
+  notifyListeners(null);
 
   const remaining: InventoryCount[] = [];
   let syncedCount = 0;
+  let errorMsg: string | null = null;
 
   for (const item of queue) {
     try {
       const docRef = doc(db, 'inventory_counts', item.id);
       await setDoc(docRef, {
         id: item.id,
-        username: item.username,
-        userId: item.userId,
-        store: item.store,
-        storeId: item.storeId,
-        sku: item.sku,
-        barcode: item.barcode,
-        itemDescription: item.itemDescription,
-        countedQuantity: Number(item.countedQuantity),
+        username: item.username || 'Counter',
+        userId: item.userId || item.username || 'device-user',
+        store: item.store || 'Unknown Store',
+        storeId: item.storeId || '',
+        sku: item.sku || 'UNKNOWN',
+        barcode: item.barcode || item.sku || '',
+        itemDescription: item.itemDescription || '',
+        countedQuantity: Number(item.countedQuantity) || 0,
         remarks: item.remarks || '',
         location: item.location || '',
         date: item.date,
@@ -153,7 +193,8 @@ export async function syncPendingCounts(): Promise<{ synced: number; remaining: 
       const updated = history.map(h => h.id === item.id ? { ...h, syncStatus: 'synced' as const } : h);
       saveLocalCounts(updated);
       syncedCount++;
-    } catch (err) {
+    } catch (err: any) {
+      errorMsg = err?.message || 'Cloud sync failed';
       console.warn(`Failed syncing count ${item.id} to Firestore. Kept in queue:`, err);
       remaining.push(item);
     }
@@ -161,67 +202,67 @@ export async function syncPendingCounts(): Promise<{ synced: number; remaining: 
 
   savePendingQueue(remaining);
   isSyncing = false;
-  notifyListeners();
+  notifyListeners(errorMsg);
 
-  return { synced: syncedCount, remaining: remaining.length };
+  return { synced: syncedCount, remaining: remaining.length, error: errorMsg };
 }
 
 /**
  * Fetches all counts from Firestore (with local merge)
  */
 export async function fetchAllCounts(): Promise<InventoryCount[]> {
-  if (!auth.currentUser) {
-    return getLocalCounts();
-  }
-
   try {
-    const q = query(collection(db, 'inventory_counts'), orderBy('createdAt', 'desc'), limit(500));
+    const q = query(collection(db, 'inventory_counts'), orderBy('createdAt', 'desc'), limit(1000));
     const snapshot = await getDocs(q);
     const firestoreItems: InventoryCount[] = [];
-    
+
     snapshot.forEach(docSnap => {
-      const d = docSnap.data();
-      firestoreItems.push({
-        id: docSnap.id,
-        username: d.username,
-        userId: d.userId,
-        store: d.store,
-        storeId: d.storeId || '',
-        sku: d.sku,
-        barcode: d.barcode || '',
-        itemDescription: d.itemDescription || '',
-        countedQuantity: Number(d.countedQuantity),
-        remarks: d.remarks || '',
-        location: d.location || '',
-        date: d.date,
-        time: d.time,
-        createdAt: d.createdAt || Date.now(),
-        syncStatus: 'synced',
-      });
+      firestoreItems.push(parseCountDoc(docSnap.id, docSnap.data()));
     });
 
-    // Merge with local pending queue so un-synced local counts remain visible
-    const pending = getPendingQueue();
-    const map = new Map<string, InventoryCount>();
-    
-    // Add firestore records
-    firestoreItems.forEach(item => map.set(item.id, item));
-    // Overlay local pending
-    pending.forEach(item => map.set(item.id, { ...item, syncStatus: 'pending' }));
-
-    const merged = Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
-    saveLocalCounts(merged);
-    return merged;
+    return mergeWithPendingQueue(firestoreItems);
   } catch (err) {
     console.warn('Network or permission issue fetching counts. Returning local cached counts:', err);
     return getLocalCounts();
   }
 }
 
-// Global online listener to auto-sync when network returns
+/**
+ * Subscribes to live Firestore count updates across all devices.
+ */
+export function subscribeToCounts(onUpdate: (counts: InventoryCount[]) => void): () => void {
+  try {
+    const q = query(collection(db, 'inventory_counts'), orderBy('createdAt', 'desc'), limit(1000));
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const firestoreItems: InventoryCount[] = [];
+        snapshot.forEach(docSnap => {
+          firestoreItems.push(parseCountDoc(docSnap.id, docSnap.data()));
+        });
+        const merged = mergeWithPendingQueue(firestoreItems);
+        onUpdate(merged);
+      },
+      (err) => {
+        console.warn('Realtime counts listener error:', err);
+        onUpdate(getLocalCounts());
+      }
+    );
+  } catch (err) {
+    console.warn('Could not attach realtime counts listener:', err);
+    onUpdate(getLocalCounts());
+    return () => {};
+  }
+}
+
+// Global online & focus listeners to auto-sync when network returns or app returns to foreground
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => {
-    console.log('Device returned online. Flushing offline count queue...');
     syncPendingCounts();
+  });
+  window.addEventListener('focus', () => {
+    if (navigator.onLine) {
+      syncPendingCounts();
+    }
   });
 }

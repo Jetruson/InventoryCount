@@ -1,6 +1,6 @@
 import { ManagedUser } from '../types/inventory';
 import { db } from '../firebase/config';
-import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
   {
@@ -17,7 +17,7 @@ export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
   {
     id: 'user-sup-101',
     username: 'supervisor.flagship',
-    displayName: 'Sarah Jenkins (Supervisor)',
+    displayName: 'Sarah Jenkins (Store Supervisor)',
     password: 'password123',
     role: 'supervisor',
     assignedStoreId: 'ST-101',
@@ -28,7 +28,7 @@ export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
   {
     id: 'user-cnt-101',
     username: 'counter.flagship',
-    displayName: 'Mark Davis (Counter)',
+    displayName: 'Mark Davis (Store Counter)',
     password: 'password123',
     role: 'counter',
     assignedStoreId: 'ST-101',
@@ -37,19 +37,46 @@ export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
     isActive: true,
   },
   {
-    id: 'user-cnt-102',
-    username: 'counter.galleria',
-    displayName: 'Emily Chen (Counter)',
+    id: 'user-ops-cnt-1',
+    username: 'ops.counter',
+    displayName: 'Alex Rivera (Ops Counter)',
     password: 'password123',
-    role: 'counter',
-    assignedStoreId: 'ST-102',
-    assignedStoreName: 'Westfield Galleria',
+    role: 'ops_counter',
+    assignedStoreId: 'ALL',
+    assignedStoreName: 'All Stores (Operations)',
+    createdAt: '2026-01-01T00:00:00Z',
+    isActive: true,
+  },
+  {
+    id: 'user-ops-sup-1',
+    username: 'ops.supervisor',
+    displayName: 'Rachel Lim (Counter Supervisor)',
+    password: 'password123',
+    role: 'ops_supervisor',
+    assignedStoreId: 'ALL',
+    assignedStoreName: 'All Stores (Operations)',
     createdAt: '2026-01-01T00:00:00Z',
     isActive: true,
   },
 ];
 
 const LOCAL_MANAGED_USERS_KEY = 'inventory_count_managed_users';
+const OPS_SEEDED_KEY = 'inventory_count_ops_roles_seeded';
+
+function parseUserDoc(id: string, d: Record<string, any>): ManagedUser {
+  return {
+    id,
+    username: d.username || id,
+    displayName: d.displayName || d.username || 'User',
+    password: d.password || '',
+    role: d.role || 'counter',
+    assignedStoreId: d.assignedStoreId || 'ST-101',
+    assignedStoreName: d.assignedStoreName || 'Downtown Flagship',
+    createdAt: d.createdAt || new Date().toISOString(),
+    createdBy: d.createdBy,
+    isActive: d.isActive !== false,
+  };
+}
 
 export function getLocalManagedUsers(): ManagedUser[] {
   try {
@@ -80,19 +107,7 @@ export async function fetchManagedUsers(): Promise<ManagedUser[]> {
     if (!snapshot.empty) {
       const users: ManagedUser[] = [];
       snapshot.forEach((docSnap) => {
-        const d = docSnap.data();
-        users.push({
-          id: docSnap.id,
-          username: d.username || docSnap.id,
-          displayName: d.displayName || d.username || 'User',
-          password: d.password || '',
-          role: d.role || 'counter',
-          assignedStoreId: d.assignedStoreId || 'ST-101',
-          assignedStoreName: d.assignedStoreName || 'Downtown Flagship',
-          createdAt: d.createdAt || new Date().toISOString(),
-          createdBy: d.createdBy,
-          isActive: d.isActive !== false,
-        });
+        users.push(parseUserDoc(docSnap.id, docSnap.data()));
       });
       saveLocalManagedUsers(users);
       return users;
@@ -103,6 +118,34 @@ export async function fetchManagedUsers(): Promise<ManagedUser[]> {
   return getLocalManagedUsers();
 }
 
+export function subscribeToManagedUsers(onUpdate: (users: ManagedUser[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'managed_users'),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const users: ManagedUser[] = [];
+          snapshot.forEach((docSnap) => {
+            users.push(parseUserDoc(docSnap.id, docSnap.data()));
+          });
+          saveLocalManagedUsers(users);
+          onUpdate(users);
+        } else {
+          onUpdate(getLocalManagedUsers());
+        }
+      },
+      (err) => {
+        console.warn('Realtime managed_users listener error:', err);
+        onUpdate(getLocalManagedUsers());
+      }
+    );
+  } catch (err) {
+    console.warn('Could not attach realtime managed_users listener:', err);
+    onUpdate(getLocalManagedUsers());
+    return () => {};
+  }
+}
+
 export async function seedUsersIfEmpty(): Promise<void> {
   try {
     const snapshot = await getDocs(collection(db, 'managed_users'));
@@ -110,6 +153,19 @@ export async function seedUsersIfEmpty(): Promise<void> {
       for (const u of DEFAULT_MANAGED_USERS) {
         await setDoc(doc(db, 'managed_users', u.id), u);
       }
+      localStorage.setItem(OPS_SEEDED_KEY, 'true');
+      return;
+    }
+
+    // Ensure default Operations role sample accounts exist once on upgrade if not already seeded
+    if (localStorage.getItem(OPS_SEEDED_KEY) !== 'true') {
+      const existingIds = new Set(snapshot.docs.map(d => d.id));
+      for (const u of DEFAULT_MANAGED_USERS) {
+        if ((u.role === 'ops_counter' || u.role === 'ops_supervisor') && !existingIds.has(u.id)) {
+          await setDoc(doc(db, 'managed_users', u.id), u);
+        }
+      }
+      localStorage.setItem(OPS_SEEDED_KEY, 'true');
     }
   } catch (e) {
     console.warn('Managed users seeding skipped or offline:', e);
@@ -182,10 +238,14 @@ export async function deleteManagedUser(userId: string): Promise<ManagedUser[]> 
 /**
  * Look up user credentials during login.
  */
-export function findUserForAuth(usernameOrEmail: string, pass?: string): ManagedUser | null {
-  const users = getLocalManagedUsers();
+export function findUserForAuth(
+  usernameOrEmail: string,
+  pass?: string,
+  usersList?: ManagedUser[]
+): ManagedUser | null {
+  const users = usersList && usersList.length > 0 ? usersList : getLocalManagedUsers();
   const query = usernameOrEmail.trim().toLowerCase();
-  
+
   // Direct match by username or email
   const matched = users.find(
     (u) =>
@@ -195,7 +255,7 @@ export function findUserForAuth(usernameOrEmail: string, pass?: string): Managed
 
   if (!matched) return null;
 
-  // If password provided and user has a password set, verify (lenient fallback for demo accounts)
+  // If password provided and user has a password set, verify
   if (pass && matched.password && matched.password !== pass) {
     return null;
   }

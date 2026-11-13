@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { subscribeToSyncStatus, syncPendingCounts } from '../services/offlineSyncService';
-import { Wifi, WifiOff, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { WifiOff, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export const OfflineIndicator: React.FC = () => {
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [justSynced, setJustSynced] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -18,7 +19,8 @@ export const OfflineIndicator: React.FC = () => {
     const unsub = subscribeToSyncStatus((status) => {
       setPendingCount(status.pendingCount);
       setIsSyncing(status.isSyncing);
-      if (status.pendingCount === 0 && !status.isSyncing && pendingCount > 0) {
+      setSyncError(status.error || null);
+      if (status.pendingCount === 0 && !status.isSyncing && !status.error && pendingCount > 0) {
         setJustSynced(true);
         setTimeout(() => setJustSynced(false), 3000);
       }
@@ -31,8 +33,8 @@ export const OfflineIndicator: React.FC = () => {
     };
   }, [pendingCount]);
 
-  // If online and zero pending items, keep screen clean without clutter
-  if (isOnline && pendingCount === 0 && !justSynced) {
+  // If online, zero pending items, and no error, keep screen clean
+  if (isOnline && pendingCount === 0 && !justSynced && !syncError) {
     return null;
   }
 
@@ -63,11 +65,22 @@ export const OfflineIndicator: React.FC = () => {
         <button
           onClick={handleManualSync}
           disabled={isSyncing}
-          className="flex items-center gap-2 rounded-xl bg-slate-800/95 border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 shadow-lg hover:bg-slate-700 active:scale-95 transition"
+          className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-medium shadow-lg active:scale-95 transition ${
+            syncError
+              ? 'bg-rose-950/95 border-rose-500/50 text-rose-200 hover:bg-rose-900'
+              : 'bg-slate-800/95 border-slate-700 text-slate-200 hover:bg-slate-700'
+          }`}
+          title={syncError || 'Tap to retry cloud sync'}
         >
-          <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
+          {syncError ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          ) : (
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
+          )}
           <span>{pendingCount} pending upload</span>
-          <span className="text-[10px] text-emerald-400 font-semibold underline">Sync</span>
+          <span className="text-[10px] text-emerald-400 font-semibold underline">
+            {isSyncing ? 'Syncing...' : 'Sync Now'}
+          </span>
         </button>
       ) : null}
     </div>
