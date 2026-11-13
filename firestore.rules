@@ -18,9 +18,39 @@ service cloud.firestore {
              data.countedQuantity is number &&
              data.countedQuantity >= 0 &&
              (!('condition' in data) || data.condition in ['Good', 'Damage']) &&
+             (!('status' in data) || data.status in ['active', 'voided']) &&
+             (!('version' in data) || (data.version is number && data.version >= 1)) &&
              data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
              data.username is string && data.username.size() > 0 && data.username.size() <= 120 &&
              data.store is string && data.store.size() > 0 && data.store.size() <= 120;
+    }
+
+    function isValidCorrectionRequest(data) {
+      return data.keys().hasAll(['id', 'requestType', 'inventoryCountId', 'targetVersion', 'store', 'sku', 'reason', 'status', 'requestedById', 'requestedByUsername', 'requestedAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.requestType in ['correction', 'void'] &&
+             data.inventoryCountId is string && data.inventoryCountId.size() > 0 && data.inventoryCountId.size() <= 128 &&
+             data.targetVersion is number && data.targetVersion >= 1 &&
+             data.reason is string && data.reason.size() > 0 && data.reason.size() <= 1000 &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.requestedById is string && data.requestedById.size() > 0 && data.requestedById.size() <= 128 &&
+             data.requestedByUsername is string && data.requestedByUsername.size() > 0 && data.requestedByUsername.size() <= 120 &&
+             data.requestedAt is number;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'inventoryCountId', 'sku', 'itemDescription', 'originalValue', 'newValue', 'action', 'reason', 'requestedBy', 'requestedById', 'timestamp', 'date', 'time']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.inventoryCountId is string && data.inventoryCountId.size() > 0 && data.inventoryCountId.size() <= 128 &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+             data.itemDescription is string && data.itemDescription.size() <= 500 &&
+             data.originalValue is string && data.originalValue.size() <= 1000 &&
+             data.newValue is string && data.newValue.size() <= 1000 &&
+             data.action in ['COUNT_SUBMITTED', 'CORRECTION_REQUESTED', 'VOID_REQUESTED', 'CORRECTION_APPROVED', 'CORRECTION_REJECTED', 'QUANTITY_CHANGED', 'LOCATION_CHANGED', 'ITEM_DETAILS_CHANGED', 'RECORD_VOIDED', 'VOID_REJECTED'] &&
+             data.reason is string && data.reason.size() <= 1000 &&
+             data.requestedBy is string && data.requestedBy.size() > 0 && data.requestedBy.size() <= 150 &&
+             data.requestedById is string && data.requestedById.size() > 0 && data.requestedById.size() <= 128 &&
+             data.timestamp is number;
     }
 
     function isValidProduct(data) {
@@ -48,12 +78,54 @@ service cloud.firestore {
       allow read: if true;
     }
 
-    // Inventory Counts Collection
-    // Credential-provisioned devices sync without requiring a Firebase Auth token; writes are schema-validated.
+    // Inventory Counts Collection (immutable original creator/timestamp; NO permanent delete allowed)
     match /inventory_counts/{countId} {
       allow read: if true;
-      allow create, update: if isValidId(countId) && isValidCount(request.resource.data);
-      allow delete: if isValidId(countId);
+      allow create: if isValidId(countId) && isValidCount(request.resource.data);
+      allow update: if isValidId(countId) &&
+                       isValidCount(request.resource.data) &&
+                       request.resource.data.userId == resource.data.userId &&
+                       (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt);
+      allow delete: if false;
+    }
+
+    // Correction & Void Requests Collection
+    // Only pending requests can transition to approved/rejected; reviewer cannot be the requester (no self-approval)
+    // Approval hierarchy:
+    // - Store Counter ('counter') -> Store Supervisor ('supervisor')
+    // - Multi-store Ops Counter ('ops_counter') -> Ops Counter Supervisor ('ops_supervisor')
+    // - Supervisors ('supervisor', 'ops_supervisor') -> Audit ('audit')
+    match /correction_requests/{requestId} {
+      allow read: if true;
+      allow create: if isValidId(requestId) &&
+                       isValidCorrectionRequest(request.resource.data) &&
+                       request.resource.data.status == 'pending';
+      allow update: if isValidId(requestId) &&
+                       isValidCorrectionRequest(request.resource.data) &&
+                       resource.data.status == 'pending' &&
+                       request.resource.data.status in ['approved', 'rejected'] &&
+                       request.resource.data.requestedById == resource.data.requestedById &&
+                       request.resource.data.inventoryCountId == resource.data.inventoryCountId &&
+                       (!('storeId' in resource.data) || request.resource.data.storeId == resource.data.storeId) &&
+                       (!('requestedByRole' in resource.data) || request.resource.data.requestedByRole == resource.data.requestedByRole) &&
+                       request.resource.data.reviewedById is string &&
+                       request.resource.data.reviewedById.size() > 0 &&
+                       request.resource.data.reviewedById != resource.data.requestedById &&
+                       request.resource.data.reviewedByRole is string &&
+                       request.resource.data.reviewedByRole in ['supervisor', 'ops_supervisor', 'audit'] &&
+                       (!('requestedByRole' in resource.data) || !(resource.data.requestedByRole in ['supervisor', 'ops_supervisor']) || request.resource.data.reviewedByRole == 'audit') &&
+                       (!('requestedByRole' in resource.data) || resource.data.requestedByRole != 'ops_counter' || request.resource.data.reviewedByRole == 'ops_supervisor') &&
+                       (!('requestedByRole' in resource.data) || resource.data.requestedByRole != 'counter' || request.resource.data.reviewedByRole == 'supervisor') &&
+                       (request.resource.data.status != 'rejected' || (request.resource.data.rejectionReason is string && request.resource.data.rejectionReason.size() > 0));
+      allow delete: if false;
+    }
+
+    // Immutable, Append-Only Audit Trail Logs (cannot be updated or deleted by anyone, including Admin)
+    match /audit_logs/{logId} {
+      allow read: if true;
+      allow create: if isValidId(logId) && isValidAuditLog(request.resource.data);
+      allow update: if false;
+      allow delete: if false;
     }
 
     // Products Master Catalog

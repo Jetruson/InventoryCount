@@ -37,16 +37,18 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
   const [activeTab, setActiveTab] = useState<'all' | 'by_user' | 'by_store' | 'by_location'>('all');
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
-  // Scoped dataset: store supervisor ONLY sees counts from their assigned store; ops_supervisor & admin see all stores
+  // Scoped dataset: exclude voided records from active inventory calculations;
+  // store supervisor ONLY sees counts from their assigned store; ops_supervisor sees all stores
   const scopedCounts = useMemo(() => {
+    const activeOnly = counts.filter((c) => c.status !== 'voided');
     if (isStoreSupervisor && assignedStore) {
-      return counts.filter(
+      return activeOnly.filter(
         (c) =>
           c.storeId === assignedStore.storeId ||
           c.store.toLowerCase() === assignedStore.name.toLowerCase()
       );
     }
-    return counts;
+    return activeOnly;
   }, [counts, isStoreSupervisor, assignedStore]);
 
   // Filtered dataset

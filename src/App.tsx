@@ -3,10 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { auth } from './firebase/config';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { AppUser, Store, InventoryCount, Product, UserRole } from './types/inventory';
+import {
+  AppUser,
+  Store,
+  InventoryCount,
+  Product,
+  UserRole,
+  CorrectionRequest,
+  AuditLogEntry,
+} from './types/inventory';
 import {
   getLocalStores,
   getStoredActiveStore,
@@ -19,7 +27,12 @@ import {
   subscribeToCounts,
   subscribeToSyncStatus,
   syncPendingCounts,
+  migrateLegacyCountRecords,
 } from './services/offlineSyncService';
+import {
+  subscribeToCorrectionRequests,
+  subscribeToAuditLogs,
+} from './services/auditService';
 import {
   fetchCatalog,
   subscribeToCatalog,
@@ -31,6 +44,8 @@ import { BottomNav, ActiveTab } from './components/BottomNav';
 import { CountScreen } from './components/CountScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { SupervisorScreen } from './components/SupervisorScreen';
+import { CorrectionRequestsScreen } from './components/CorrectionRequestsScreen';
+import { AuditTrailScreen } from './components/AuditTrailScreen';
 import { CatalogScreen } from './components/CatalogScreen';
 import { AdminScreen } from './components/AdminScreen';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -44,6 +59,8 @@ export default function App() {
   const [stores, setStores] = useState<Store[]>(getLocalStores());
   const [counts, setCounts] = useState<InventoryCount[]>([]);
   const [catalog, setCatalog] = useState<Product[]>([]);
+  const [correctionRequests, setCorrectionRequests] = useState<CorrectionRequest[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [activeTab, setActiveTab] = useState<ActiveTab>('count');
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState<boolean>(false);
@@ -167,25 +184,42 @@ export default function App() {
     }
   }, [currentUser, stores, activeStore.storeId]);
 
-  // Admin users can only access Admin & Catalog; Audit users can ONLY access History
+  // Strict role-based tab navigation guard
   useEffect(() => {
-    if (
-      currentUser?.role === 'admin' &&
-      activeTab !== 'admin' &&
-      activeTab !== 'catalog'
-    ) {
-      setActiveTab('admin');
-    } else if (currentUser?.role === 'audit' && activeTab !== 'history') {
-      setActiveTab('history');
+    const role = currentUser?.role;
+    if (!role) return;
+
+    if (role === 'admin') {
+      if (activeTab !== 'admin' && activeTab !== 'catalog') {
+        setActiveTab('admin');
+      }
+    } else if (role === 'audit') {
+      if (activeTab !== 'history' && activeTab !== 'requests' && activeTab !== 'audit_trail') {
+        setActiveTab('history');
+      }
+    } else if (role === 'counter' || role === 'ops_counter') {
+      if (
+        activeTab === 'requests' ||
+        activeTab === 'supervisor' ||
+        activeTab === 'audit_trail' ||
+        activeTab === 'admin'
+      ) {
+        setActiveTab('count');
+      }
+    } else if (role === 'supervisor' || role === 'ops_supervisor') {
+      if (activeTab === 'admin' || activeTab === 'audit_trail') {
+        setActiveTab('count');
+      }
     }
   }, [currentUser?.role, activeTab]);
 
-  // Real-time cloud subscriptions for catalog, counts, and pending sync flushing
+  // Real-time cloud subscriptions for catalog, counts, correction requests, audit logs, and legacy migration
   useEffect(() => {
     if (!currentUser) return;
 
     seedUsersIfEmpty();
     seedCatalogIfEmpty();
+    migrateLegacyCountRecords();
 
     // Immediately flush any pending offline counts from this device
     if (navigator.onLine) {
@@ -200,6 +234,14 @@ export default function App() {
       setCatalog(liveCatalog);
     });
 
+    const unsubRequests = subscribeToCorrectionRequests((liveRequests) => {
+      setCorrectionRequests(liveRequests);
+    });
+
+    const unsubAuditLogs = subscribeToAuditLogs((liveLogs) => {
+      setAuditLogs(liveLogs);
+    });
+
     const unsubSync = subscribeToSyncStatus((status) => {
       setPendingSyncCount(status.pendingCount);
     });
@@ -207,9 +249,45 @@ export default function App() {
     return () => {
       unsubCounts();
       unsubCatalog();
+      unsubRequests();
+      unsubAuditLogs();
       unsubSync();
     };
   }, [currentUser]);
+
+  const pendingRequestsCount = useMemo(() => {
+    if (!currentUser) return 0;
+    const role = currentUser.role;
+    const assignedStoreId = currentUser.assignedStoreId || currentUser.activeStoreId;
+    const isStoreLockedAudit =
+      role === 'audit' && Boolean(assignedStoreId && assignedStoreId !== 'ALL');
+
+    return correctionRequests.filter((r) => {
+      if (r.status !== 'pending') return false;
+      const bySupervisor =
+        r.requestedByRole === 'supervisor' || r.requestedByRole === 'ops_supervisor';
+      const byOpsCounter = r.requestedByRole === 'ops_counter';
+
+      if (role === 'audit') {
+        if (!bySupervisor) return false;
+        if (isStoreLockedAudit && assignedStoreId) {
+          return r.storeId === assignedStoreId;
+        }
+        return true;
+      }
+
+      if (role === 'ops_supervisor') {
+        return byOpsCounter;
+      }
+
+      if (role === 'supervisor') {
+        if (bySupervisor || byOpsCounter) return false;
+        return Boolean(assignedStoreId && assignedStoreId !== 'ALL' && r.storeId === assignedStoreId);
+      }
+
+      return false;
+    }).length;
+  }, [correctionRequests, currentUser]);
 
   const handleSelectStore = (store: Store) => {
     const canSwitchStore =
@@ -308,18 +386,39 @@ export default function App() {
             counts={counts}
             activeStore={activeStore}
             currentUser={currentUser}
+            correctionRequests={correctionRequests}
           />
         )}
 
+        {activeTab === 'requests' &&
+          (currentUser.role === 'audit' ||
+            currentUser.role === 'supervisor' ||
+            currentUser.role === 'ops_supervisor') && (
+            <CorrectionRequestsScreen
+              requests={correctionRequests}
+              stores={stores}
+              currentUser={currentUser}
+            />
+          )}
+
         {activeTab === 'supervisor' &&
-          currentUser.role !== 'audit' &&
-          currentUser.role !== 'admin' && (
+          (currentUser.role === 'supervisor' || currentUser.role === 'ops_supervisor') && (
             <SupervisorScreen
               counts={counts}
               stores={stores}
               currentUser={currentUser}
             />
           )}
+
+        {activeTab === 'audit_trail' && currentUser.role === 'audit' && (
+          <AuditTrailScreen
+            auditLogs={auditLogs}
+            counts={counts}
+            correctionRequests={correctionRequests}
+            stores={stores}
+            currentUser={currentUser}
+          />
+        )}
 
         {activeTab === 'admin' && currentUser.role === 'admin' && (
           <AdminScreen
@@ -370,6 +469,7 @@ export default function App() {
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         pendingSyncCount={pendingSyncCount}
+        pendingRequestsCount={pendingRequestsCount}
         currentUser={currentUser}
       />
 

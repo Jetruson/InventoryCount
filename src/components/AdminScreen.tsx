@@ -610,6 +610,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   // --- COUNT DATA EXTRACTION HANDLERS ---
   const filteredCountsForExtraction = useMemo(() => {
     return counts.filter((c) => {
+      if (c.status === 'voided') return false;
       // Store filter
       if (selectedStore !== 'all') {
         const matchesStore = c.storeId === selectedStore || c.store.toLowerCase().includes(selectedStore.toLowerCase());

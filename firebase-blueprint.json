@@ -66,6 +66,27 @@
           "type": "string",
           "format": "date-time",
           "description": "Timestamp when the record was saved"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "voided"],
+          "description": "Record status (active or voided soft-delete)"
+        },
+        "version": {
+          "type": "number",
+          "description": "Optimistic concurrency revision number"
+        },
+        "originalQuantity": {
+          "type": "number",
+          "description": "Original submitted quantity preserved across corrections"
+        },
+        "originalLocation": {
+          "type": "string",
+          "description": "Original submitted location preserved across corrections"
+        },
+        "voidReason": {
+          "type": "string",
+          "description": "Supervisor-approved reason for voiding the count"
         }
       },
       "required": ["username", "userId", "store", "sku", "countedQuantity", "date", "time"]
@@ -200,6 +221,60 @@
         }
       },
       "required": ["username", "displayName", "role", "assignedStoreId", "assignedStoreName"]
+    },
+    "CorrectionRequest": {
+      "title": "CorrectionRequest",
+      "description": "Request to correct or void a submitted inventory count, requiring supervisor approval",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique correction request ID" },
+        "requestType": { "type": "string", "enum": ["correction", "void"], "description": "Type of request" },
+        "inventoryCountId": { "type": "string", "description": "Related inventory_counts document ID" },
+        "targetVersion": { "type": "number", "description": "Target record version for concurrency guard" },
+        "store": { "type": "string", "description": "Store name" },
+        "storeId": { "type": "string", "description": "Store identifier" },
+        "sku": { "type": "string", "description": "Item SKU" },
+        "reason": { "type": "string", "description": "Mandatory reason for correction or void" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "Approval workflow status" },
+        "requestedById": { "type": "string", "description": "Requester user ID" },
+        "requestedByUsername": { "type": "string", "description": "Requester display name" },
+        "requestedAt": { "type": "number", "description": "System timestamp of request" },
+        "reviewedById": { "type": "string", "description": "Reviewer user ID" },
+        "reviewedByUsername": { "type": "string", "description": "Reviewer display name" },
+        "rejectionReason": { "type": "string", "description": "Mandatory reason when rejected" }
+      },
+      "required": ["id", "requestType", "inventoryCountId", "targetVersion", "reason", "status", "requestedById", "requestedByUsername", "requestedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable, append-only audit trail event for inventory actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique audit transaction ID" },
+        "inventoryCountId": { "type": "string", "description": "Related inventory_counts transaction ID" },
+        "correctionRequestId": { "type": "string", "description": "Related correction request ID if applicable" },
+        "store": { "type": "string", "description": "Store name" },
+        "storeId": { "type": "string", "description": "Store ID" },
+        "sku": { "type": "string", "description": "Item ID / SKU" },
+        "itemDescription": { "type": "string", "description": "Item description" },
+        "location": { "type": "string", "description": "Inventory location" },
+        "originalValue": { "type": "string", "description": "Before-change snapshot summary" },
+        "newValue": { "type": "string", "description": "After-change snapshot summary" },
+        "action": {
+          "type": "string",
+          "enum": ["COUNT_SUBMITTED", "CORRECTION_REQUESTED", "VOID_REQUESTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "QUANTITY_CHANGED", "LOCATION_CHANGED", "ITEM_DETAILS_CHANGED", "RECORD_VOIDED", "VOID_REJECTED"],
+          "description": "Action performed"
+        },
+        "approvalStatus": { "type": "string", "enum": ["N/A", "Pending", "Approved", "Rejected"] },
+        "reason": { "type": "string", "description": "Reason for change or submission" },
+        "requestedBy": { "type": "string", "description": "User who initiated the action" },
+        "requestedById": { "type": "string", "description": "UID of requester" },
+        "reviewedBy": { "type": "string", "description": "Supervisor who approved or rejected" },
+        "timestamp": { "type": "number", "description": "System-generated timestamp" },
+        "date": { "type": "string", "description": "YYYY-MM-DD" },
+        "time": { "type": "string", "description": "HH:mm:ss" }
+      },
+      "required": ["id", "inventoryCountId", "sku", "itemDescription", "originalValue", "newValue", "action", "reason", "requestedBy", "requestedById", "timestamp", "date", "time"]
     }
   },
   "firestore": {
@@ -208,6 +283,18 @@
         "$ref": "#/entities/InventoryCount"
       },
       "description": "Collection of recorded inventory counts"
+    },
+    "/correction_requests/{requestId}": {
+      "schema": {
+        "$ref": "#/entities/CorrectionRequest"
+      },
+      "description": "Correction and void requests requiring supervisor approval"
+    },
+    "/audit_logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/AuditLog"
+      },
+      "description": "Immutable append-only audit trail logs"
     },
     "/products/{productId}": {
       "schema": {

@@ -1,9 +1,11 @@
 import { InventoryCount } from '../types/inventory';
 import { db } from '../firebase/config';
+import { recordCountSubmittedAuditLog } from './auditService';
 import {
   collection,
   doc,
   setDoc,
+  updateDoc,
   getDocs,
   onSnapshot,
   query,
@@ -101,6 +103,11 @@ function mergeWithPendingQueue(firestoreItems: InventoryCount[]): InventoryCount
 }
 
 function parseCountDoc(id: string, d: Record<string, any>): InventoryCount {
+  const qty = Number(d.countedQuantity) || 0;
+  const loc = d.location || '';
+  const cond = d.condition === 'Damage' ? 'Damage' : 'Good';
+  const rem = d.remarks || '';
+
   return {
     id,
     username: d.username || 'Associate',
@@ -110,31 +117,53 @@ function parseCountDoc(id: string, d: Record<string, any>): InventoryCount {
     sku: d.sku || '',
     barcode: d.barcode || '',
     itemDescription: d.itemDescription || '',
-    countedQuantity: Number(d.countedQuantity) || 0,
-    condition: d.condition === 'Damage' ? 'Damage' : 'Good',
-    remarks: d.remarks || '',
-    location: d.location || '',
+    countedQuantity: qty,
+    condition: cond,
+    remarks: rem,
+    location: loc,
     date: d.date || '',
     time: d.time || '',
     createdAt: typeof d.createdAt === 'number' ? d.createdAt : Date.now(),
     syncStatus: 'synced',
+    status: d.status === 'voided' ? 'voided' : 'active',
+    originalQuantity: typeof d.originalQuantity === 'number' ? d.originalQuantity : qty,
+    originalLocation: d.originalLocation !== undefined ? d.originalLocation : loc,
+    originalCondition: d.originalCondition === 'Damage' || d.originalCondition === 'Good' ? d.originalCondition : cond,
+    originalRemarks: d.originalRemarks !== undefined ? d.originalRemarks : rem,
+    version: typeof d.version === 'number' && d.version >= 1 ? d.version : 1,
+    lastModifiedAt: d.lastModifiedAt,
+    lastModifiedBy: d.lastModifiedBy,
+    voidedAt: d.voidedAt,
+    voidedBy: d.voidedBy,
+    voidReason: d.voidReason,
   };
 }
 
 /**
  * Saves a new count record.
- * Writes immediately to local storage and attempts Firestore sync.
- * If offline or write fails, preserves in pending queue.
+ * Writes immediately to local storage, attempts Firestore sync, and logs an immutable audit event.
  */
-export async function recordCount(countData: Omit<InventoryCount, 'id' | 'createdAt' | 'syncStatus'>): Promise<InventoryCount> {
+export async function recordCount(
+  countData: Omit<InventoryCount, 'id' | 'createdAt' | 'syncStatus'>
+): Promise<InventoryCount> {
   const id = `cnt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = Date.now();
+  const initialQty = Number(countData.countedQuantity) || 0;
+  const initialLoc = countData.location || '';
+  const initialCond = countData.condition || 'Good';
+  const initialRemarks = countData.remarks || '';
 
   const newCount: InventoryCount = {
     ...countData,
     id,
     createdAt: now,
     syncStatus: 'pending',
+    status: 'active',
+    version: 1,
+    originalQuantity: initialQty,
+    originalLocation: initialLoc,
+    originalCondition: initialCond,
+    originalRemarks: initialRemarks,
   };
 
   // 1. Save to local history immediately
@@ -151,7 +180,12 @@ export async function recordCount(countData: Omit<InventoryCount, 'id' | 'create
     await syncPendingCounts();
   }
 
-  return getLocalCounts().find(c => c.id === id) || newCount;
+  const saved = getLocalCounts().find((c) => c.id === id) || newCount;
+
+  // 4. Record immutable COUNT_SUBMITTED audit log entry
+  await recordCountSubmittedAuditLog(saved);
+
+  return saved;
 }
 
 /**
@@ -188,6 +222,16 @@ export async function syncPendingCounts(): Promise<{ synced: number; remaining: 
         date: item.date,
         time: item.time,
         createdAt: item.createdAt,
+        status: item.status === 'voided' ? 'voided' : 'active',
+        version: item.version || 1,
+        originalQuantity:
+          typeof item.originalQuantity === 'number'
+            ? item.originalQuantity
+            : Number(item.countedQuantity) || 0,
+        originalLocation:
+          item.originalLocation !== undefined ? item.originalLocation : item.location || '',
+        originalCondition: item.originalCondition || (item.condition === 'Damage' ? 'Damage' : 'Good'),
+        originalRemarks: item.originalRemarks !== undefined ? item.originalRemarks : item.remarks || '',
       });
 
       // Update syncStatus in local history
@@ -254,6 +298,40 @@ export function subscribeToCounts(onUpdate: (counts: InventoryCount[]) => void):
     console.warn('Could not attach realtime counts listener:', err);
     onUpdate(getLocalCounts());
     return () => {};
+  }
+}
+
+/**
+ * Idempotent migration for legacy inventory_counts docs lacking status/version/original* fields.
+ */
+export async function migrateLegacyCountRecords(): Promise<void> {
+  try {
+    if (localStorage.getItem('inventory_counts_v2_migrated') === 'true') return;
+    const snapshot = await getDocs(collection(db, 'inventory_counts'));
+    let migrated = 0;
+    for (const docSnap of snapshot.docs) {
+      const d = docSnap.data();
+      if (d.status === undefined || d.version === undefined || d.originalQuantity === undefined) {
+        await updateDoc(doc(db, 'inventory_counts', docSnap.id), {
+          status: d.status === 'voided' ? 'voided' : 'active',
+          version: typeof d.version === 'number' && d.version >= 1 ? d.version : 1,
+          originalQuantity:
+            typeof d.originalQuantity === 'number'
+              ? d.originalQuantity
+              : Number(d.countedQuantity) || 0,
+          originalLocation: d.originalLocation !== undefined ? d.originalLocation : d.location || '',
+          originalCondition: d.originalCondition || (d.condition === 'Damage' ? 'Damage' : 'Good'),
+          originalRemarks: d.originalRemarks !== undefined ? d.originalRemarks : d.remarks || '',
+        });
+        migrated++;
+      }
+    }
+    localStorage.setItem('inventory_counts_v2_migrated', 'true');
+    if (migrated > 0) {
+      console.info(`Migrated ${migrated} legacy inventory count records to v2 schema.`);
+    }
+  } catch (err) {
+    console.warn('Legacy count migration skipped or deferred:', err);
   }
 }
 

@@ -1,12 +1,13 @@
-import { Camera, Clock, ShieldCheck, Package, ShieldAlert } from 'lucide-react';
+import { Camera, Clock, ShieldCheck, Package, ShieldAlert, ClipboardCheck, FileSearch } from 'lucide-react';
 import { AppUser } from '../types/inventory';
 
-export type ActiveTab = 'count' | 'history' | 'supervisor' | 'catalog' | 'admin';
+export type ActiveTab = 'count' | 'history' | 'requests' | 'supervisor' | 'audit_trail' | 'catalog' | 'admin';
 
 interface BottomNavProps {
   activeTab: ActiveTab;
   onChangeTab: (tab: ActiveTab) => void;
   pendingSyncCount?: number;
+  pendingRequestsCount?: number;
   currentUser?: AppUser | null;
 }
 
@@ -21,29 +22,51 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   activeTab,
   onChangeTab,
   pendingSyncCount = 0,
+  pendingRequestsCount = 0,
   currentUser,
 }) => {
   const role = currentUser?.role || 'counter';
 
   const allTabs: TabItem[] =
     role === 'audit'
-      ? [{ id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null }]
+      ? [
+          { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
+          {
+            id: 'requests',
+            label: 'Requests',
+            icon: ClipboardCheck,
+            badge: pendingRequestsCount > 0 ? pendingRequestsCount : null,
+          },
+          { id: 'audit_trail', label: 'Audit Trail', icon: FileSearch },
+        ]
       : role === 'admin'
       ? [
           { id: 'admin', label: 'Admin', icon: ShieldAlert },
           { id: 'catalog', label: 'Catalog', icon: Package },
         ]
+      : role === 'supervisor' || role === 'ops_supervisor'
+      ? [
+          { id: 'count', label: 'Count', icon: Camera },
+          { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
+          {
+            id: 'requests',
+            label: 'Requests',
+            icon: ClipboardCheck,
+            badge: pendingRequestsCount > 0 ? pendingRequestsCount : null,
+          },
+          { id: 'supervisor', label: 'Supervisor', icon: ShieldCheck },
+          { id: 'catalog', label: 'Catalog', icon: Package },
+        ]
       : [
           { id: 'count', label: 'Count', icon: Camera },
           { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
-          ...(role === 'supervisor' || role === 'ops_supervisor'
-            ? [{ id: 'supervisor' as ActiveTab, label: 'Supervisor', icon: ShieldCheck }]
-            : []),
           { id: 'catalog', label: 'Catalog', icon: Package },
         ];
 
   const gridColsClass =
-    allTabs.length === 5
+    allTabs.length === 6
+      ? 'grid-cols-6'
+      : allTabs.length === 5
       ? 'grid-cols-5'
       : allTabs.length === 4
       ? 'grid-cols-4'
@@ -55,7 +78,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 pb-safe">
-      <div className={`max-w-md mx-auto grid ${gridColsClass} h-16 items-center px-1`}>
+      <div className={`max-w-lg mx-auto grid ${gridColsClass} h-16 items-center px-1`}>
         {allTabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -68,6 +91,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({
                 isActive
                   ? tab.id === 'admin'
                     ? 'text-purple-400 font-bold'
+                    : tab.id === 'audit_trail'
+                    ? 'text-indigo-400 font-bold'
+                    : tab.id === 'requests'
+                    ? 'text-amber-400 font-bold'
                     : 'text-emerald-400 font-bold'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
@@ -75,16 +102,26 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               <div className="relative">
                 <Icon className={`w-5 h-5 transition-transform ${isActive ? 'scale-110 stroke-[2.4]' : 'stroke-[1.8]'}`} />
                 {tab.badge && (
-                  <span className="absolute -top-1.5 -right-2 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-black text-slate-950">
+                  <span className="absolute -top-1.5 -right-2 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-amber-500 text-[10px] font-black text-slate-950">
                     {tab.badge}
                   </span>
                 )}
               </div>
-              <span className={`text-[11px] mt-1 tracking-tight ${isActive ? 'font-bold' : 'font-medium'}`}>
+              <span className={`text-[10px] sm:text-[11px] mt-1 tracking-tight ${isActive ? 'font-bold' : 'font-medium'}`}>
                 {tab.label}
               </span>
               {isActive && (
-                <span className={`absolute bottom-1 w-6 h-0.5 rounded-full ${tab.id === 'admin' ? 'bg-purple-400' : 'bg-emerald-400'}`} />
+                <span
+                  className={`absolute bottom-1 w-5 h-0.5 rounded-full ${
+                    tab.id === 'admin'
+                      ? 'bg-purple-400'
+                      : tab.id === 'audit_trail'
+                      ? 'bg-indigo-400'
+                      : tab.id === 'requests'
+                      ? 'bg-amber-400'
+                      : 'bg-emerald-400'
+                  }`}
+                />
               )}
             </button>
           );
