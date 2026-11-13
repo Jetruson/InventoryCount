@@ -44,7 +44,13 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   const [barcodeInput, setBarcodeInput] = useState<string>('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [countedQty, setCountedQty] = useState<string>('1');
-  const [condition, setCondition] = useState<ItemCondition>('Good');
+  const [condition, setCondition] = useState<ItemCondition>(() => {
+    try {
+      return localStorage.getItem('inventory_count_active_condition') === 'Damage' ? 'Damage' : 'Good';
+    } catch {
+      return 'Good';
+    }
+  });
   const [remarks, setRemarks] = useState<string>('');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
@@ -201,11 +207,10 @@ export const CountScreen: React.FC<CountScreenProps> = ({
         setSaveSuccessMsg(null);
       }, 4500);
 
-      // Reset item inputs for next count (currentLocation is retained!)
+      // Reset item inputs for next count (currentLocation & condition are retained!)
       setBarcodeInput('');
       setSelectedProduct(null);
       setCountedQty('1');
-      setCondition('Good');
       setRemarks('');
     } catch (err: unknown) {
       setValidationError('Error saving count. Please verify network or try again.');
@@ -590,7 +595,13 @@ export const CountScreen: React.FC<CountScreenProps> = ({
           <select
             id="item-condition-select"
             value={condition}
-            onChange={(e) => setCondition(e.target.value as ItemCondition)}
+            onChange={(e) => {
+              const next = e.target.value as ItemCondition;
+              setCondition(next);
+              try {
+                localStorage.setItem('inventory_count_active_condition', next);
+              } catch {}
+            }}
             className={`w-full h-12 appearance-none rounded-xl border-2 px-3.5 pr-10 text-sm font-bold focus:outline-none transition cursor-pointer ${
               condition === 'Damage'
                 ? 'border-rose-500/70 bg-rose-950/30 text-rose-300 focus:border-rose-400'
