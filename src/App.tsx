@@ -167,9 +167,13 @@ export default function App() {
     }
   }, [currentUser, stores, activeStore.storeId]);
 
-  // Admin users do not have a Count page; Audit users can ONLY access History
+  // Admin users can only access Admin & Catalog; Audit users can ONLY access History
   useEffect(() => {
-    if (currentUser?.role === 'admin' && activeTab === 'count') {
+    if (
+      currentUser?.role === 'admin' &&
+      activeTab !== 'admin' &&
+      activeTab !== 'catalog'
+    ) {
       setActiveTab('admin');
     } else if (currentUser?.role === 'audit' && activeTab !== 'history') {
       setActiveTab('history');
@@ -299,7 +303,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'history' && (
+        {activeTab === 'history' && currentUser.role !== 'admin' && (
           <HistoryScreen
             counts={counts}
             activeStore={activeStore}
@@ -307,13 +311,15 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'supervisor' && currentUser.role !== 'audit' && (
-          <SupervisorScreen
-            counts={counts}
-            stores={stores}
-            currentUser={currentUser}
-          />
-        )}
+        {activeTab === 'supervisor' &&
+          currentUser.role !== 'audit' &&
+          currentUser.role !== 'admin' && (
+            <SupervisorScreen
+              counts={counts}
+              stores={stores}
+              currentUser={currentUser}
+            />
+          )}
 
         {activeTab === 'admin' && currentUser.role === 'admin' && (
           <AdminScreen

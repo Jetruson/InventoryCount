@@ -28,16 +28,16 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   const allTabs: TabItem[] =
     role === 'audit'
       ? [{ id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null }]
+      : role === 'admin'
+      ? [
+          { id: 'admin', label: 'Admin', icon: ShieldAlert },
+          { id: 'catalog', label: 'Catalog', icon: Package },
+        ]
       : [
-          ...(role !== 'admin'
-            ? [{ id: 'count' as ActiveTab, label: 'Count', icon: Camera }]
-            : []),
+          { id: 'count', label: 'Count', icon: Camera },
           { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
-          ...(role === 'supervisor' || role === 'ops_supervisor' || role === 'admin'
+          ...(role === 'supervisor' || role === 'ops_supervisor'
             ? [{ id: 'supervisor' as ActiveTab, label: 'Supervisor', icon: ShieldCheck }]
-            : []),
-          ...(role === 'admin'
-            ? [{ id: 'admin' as ActiveTab, label: 'Admin', icon: ShieldAlert }]
             : []),
           { id: 'catalog', label: 'Catalog', icon: Package },
         ];

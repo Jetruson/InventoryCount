@@ -1,7 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Product } from '../types/inventory';
 import { addProductToCatalog } from '../services/catalogService';
 import { X, Plus, PackageCheck } from 'lucide-react';
+
+const UOM_OPTIONS = [
+  'PC',
+  'PK',
+  'SET',
+  'M',
+  'ROLL',
+  'L',
+  'BUN',
+  'PKS',
+  'ST',
+  'MTR',
+  'BOX',
+  'pcs',
+  'KG',
+  'PR',
+] as const;
 
 interface AddProductModalProps {
   initialBarcode?: string;
@@ -21,10 +38,21 @@ export const AddProductModal: React.FC<AddProductModalProps> = ({
   const [sku, setSku] = useState(initialSku || (initialBarcode ? `SKU-${initialBarcode.slice(-6)}` : ''));
   const [barcode, setBarcode] = useState(initialBarcode);
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('General Retail');
-  const [unit, setUnit] = useState('pcs');
+  const [category, setCategory] = useState('');
+  const [unit, setUnit] = useState<string>('PC');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setSku(initialSku || (initialBarcode ? `SKU-${initialBarcode.slice(-6)}` : ''));
+      setBarcode(initialBarcode);
+      setDescription('');
+      setCategory('');
+      setUnit('PC');
+      setError(null);
+    }
+  }, [isOpen, initialBarcode, initialSku]);
 
   if (!isOpen) return null;
 
@@ -50,8 +78,8 @@ export const AddProductModal: React.FC<AddProductModalProps> = ({
         sku: cleanItemNo,
         barcode: cleanBarcode,
         description: description.trim(),
-        category: category.trim(),
-        unit: unit.trim(),
+        category: category.trim() || 'General',
+        unit: unit.trim() || 'PC',
       });
       onProductAdded(added);
       onClose();
@@ -93,7 +121,7 @@ export const AddProductModal: React.FC<AddProductModalProps> = ({
               type="text"
               value={sku}
               onChange={(e) => setSku(e.target.value)}
-              placeholder="e.g. APP-TEE-BLK-S"
+              placeholder="e.g. 00001629"
               className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 font-mono text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none uppercase"
               required
             />
@@ -107,7 +135,7 @@ export const AddProductModal: React.FC<AddProductModalProps> = ({
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="e.g. Men's Cotton T-Shirt Black Small"
+              placeholder="e.g. IA-5273-1WW (IA-6349-5) STRIPLIGHT 3528 60LEDS OUTDOOR WW"
               className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
               required
             />
@@ -129,18 +157,13 @@ export const AddProductModal: React.FC<AddProductModalProps> = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">Item Group</label>
-              <select
+              <input
+                type="text"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-xs text-white focus:border-emerald-500 focus:outline-none"
-              >
-                <option value="General Retail">General Retail</option>
-                <option value="Apparel">Apparel</option>
-                <option value="Electronics">Electronics</option>
-                <option value="Grocery">Grocery</option>
-                <option value="Home & Living">Home & Living</option>
-                <option value="Health & Beauty">Health & Beauty</option>
-              </select>
+                placeholder="Enter item group"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">UoM (Unit of Measure)</label>
@@ -149,12 +172,11 @@ export const AddProductModal: React.FC<AddProductModalProps> = ({
                 onChange={(e) => setUnit(e.target.value)}
                 className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-xs text-white focus:border-emerald-500 focus:outline-none"
               >
-                <option value="pcs">Pieces (pcs)</option>
-                <option value="box">Box (box)</option>
-                <option value="pack">Pack (pack)</option>
-                <option value="bag">Bag (bag)</option>
-                <option value="tin">Tin (tin)</option>
-                <option value="kg">Kilogram (kg)</option>
+                {UOM_OPTIONS.map((uom) => (
+                  <option key={uom} value={uom}>
+                    {uom}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
