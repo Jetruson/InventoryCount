@@ -454,7 +454,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     setStoreActionError(null);
     setStoreActionSuccess(null);
 
-    const cleanId = newStoreId.trim().toUpperCase();
+    const cleanId = newStoreId.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '-');
     const cleanName = newStoreName.trim();
     const cleanLoc = newStoreLocation.trim();
 

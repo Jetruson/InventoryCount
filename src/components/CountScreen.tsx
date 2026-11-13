@@ -64,9 +64,9 @@ export const CountScreen: React.FC<CountScreenProps> = ({
 
   // Sync catalog whenever App.tsx pushes a real-time Firestore catalog update
   useEffect(() => {
-    if (externalCatalog && externalCatalog.length > 0) {
+    if (externalCatalog !== undefined) {
       setCatalog(externalCatalog);
-    } else if (!externalCatalog) {
+    } else {
       setCatalog(getLocalCatalog());
     }
   }, [externalCatalog]);
