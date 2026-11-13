@@ -17,6 +17,7 @@ service cloud.firestore {
              data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
              data.countedQuantity is number &&
              data.countedQuantity >= 0 &&
+             (!('condition' in data) || data.condition in ['Good', 'Damage']) &&
              data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
              data.username is string && data.username.size() > 0 && data.username.size() <= 120 &&
              data.store is string && data.store.size() > 0 && data.store.size() <= 120;
@@ -39,7 +40,7 @@ service cloud.firestore {
       return data.keys().hasAll(['username', 'displayName', 'role', 'assignedStoreId', 'assignedStoreName']) &&
              data.username is string && data.username.size() > 0 && data.username.size() <= 120 &&
              data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 150 &&
-             data.role in ['counter', 'ops_counter', 'supervisor', 'ops_supervisor', 'admin'];
+             data.role in ['counter', 'ops_counter', 'supervisor', 'ops_supervisor', 'audit', 'admin'];
     }
 
     // Connection health check

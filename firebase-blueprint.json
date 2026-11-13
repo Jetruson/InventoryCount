@@ -41,6 +41,11 @@
           "type": "number",
           "description": "Physical quantity counted (>= 0)"
         },
+        "condition": {
+          "type": "string",
+          "enum": ["Good", "Damage"],
+          "description": "Classification of the counted item condition (Good or Damage)"
+        },
         "remarks": {
           "type": "string",
           "description": "Optional notes or damage remarks"
@@ -140,8 +145,8 @@
         },
         "role": {
           "type": "string",
-          "enum": ["counter", "ops_counter", "supervisor", "ops_supervisor", "admin"],
-          "description": "User role: counter, ops_counter, supervisor, ops_supervisor, or admin"
+          "enum": ["counter", "ops_counter", "supervisor", "ops_supervisor", "audit", "admin"],
+          "description": "User role: counter, ops_counter, supervisor, ops_supervisor, audit, or admin"
         },
         "defaultStore": {
           "type": "string",
@@ -173,7 +178,7 @@
         },
         "role": {
           "type": "string",
-          "enum": ["counter", "ops_counter", "supervisor", "ops_supervisor", "admin"],
+          "enum": ["counter", "ops_counter", "supervisor", "ops_supervisor", "audit", "admin"],
           "description": "Assigned role"
         },
         "assignedStoreId": {

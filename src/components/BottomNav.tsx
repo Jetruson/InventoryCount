@@ -25,24 +25,33 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 }) => {
   const role = currentUser?.role || 'counter';
 
-  const allTabs: TabItem[] = [
-    { id: 'count', label: 'Count', icon: Camera },
-    { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
-    ...(role === 'supervisor' || role === 'ops_supervisor' || role === 'admin'
-      ? [{ id: 'supervisor' as ActiveTab, label: 'Supervisor', icon: ShieldCheck }]
-      : []),
-    ...(role === 'admin'
-      ? [{ id: 'admin' as ActiveTab, label: 'Admin', icon: ShieldAlert }]
-      : []),
-    { id: 'catalog', label: 'Catalog', icon: Package },
-  ];
+  const allTabs: TabItem[] =
+    role === 'audit'
+      ? [{ id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null }]
+      : [
+          ...(role !== 'admin'
+            ? [{ id: 'count' as ActiveTab, label: 'Count', icon: Camera }]
+            : []),
+          { id: 'history', label: 'History', icon: Clock, badge: pendingSyncCount > 0 ? pendingSyncCount : null },
+          ...(role === 'supervisor' || role === 'ops_supervisor' || role === 'admin'
+            ? [{ id: 'supervisor' as ActiveTab, label: 'Supervisor', icon: ShieldCheck }]
+            : []),
+          ...(role === 'admin'
+            ? [{ id: 'admin' as ActiveTab, label: 'Admin', icon: ShieldAlert }]
+            : []),
+          { id: 'catalog', label: 'Catalog', icon: Package },
+        ];
 
   const gridColsClass =
     allTabs.length === 5
       ? 'grid-cols-5'
       : allTabs.length === 4
       ? 'grid-cols-4'
-      : 'grid-cols-3';
+      : allTabs.length === 3
+      ? 'grid-cols-3'
+      : allTabs.length === 2
+      ? 'grid-cols-2'
+      : 'grid-cols-1';
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 pb-safe">

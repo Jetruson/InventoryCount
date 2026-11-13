@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MapPin, Barcode, Camera, Check, X, QrCode, Sparkles } from 'lucide-react';
+import { MapPin, Check, X } from 'lucide-react';
 import { BarcodeScanner } from './BarcodeScanner';
 import { playScanSuccessSound } from '../utils/audioFeedback';
 
@@ -9,19 +9,6 @@ interface LocationPickerModalProps {
   onClose: () => void;
   onSelectLocation: (newLocation: string) => void;
 }
-
-const COMMON_PRESETS = [
-  'Aisle 1 - Shelf A',
-  'Aisle 1 - Shelf B',
-  'Aisle 2 - Shelf A',
-  'Aisle 2 - Shelf B',
-  'Aisle 3 - Shelf C',
-  'Backroom Rack 01',
-  'Backroom Rack 02',
-  'Bin B-104',
-  'Endcap Display 1',
-  'Front Checkout Bay',
-];
 
 export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
   isOpen,
@@ -119,7 +106,13 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
               )}
             </div>
           ) : (
-            <div className="space-y-3.5">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSave();
+              }}
+              className="space-y-3.5"
+            >
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                   Location Code / Shelf Name
@@ -137,29 +130,6 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
                 </div>
               </div>
 
-              {/* Quick Presets */}
-              <div>
-                <span className="block text-[11px] font-semibold text-slate-400 mb-1.5">
-                  Quick Location Presets:
-                </span>
-                <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto">
-                  {COMMON_PRESETS.map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setManualInput(preset)}
-                      className={`rounded-lg px-2.5 py-1 text-xs font-mono transition ${
-                        manualInput === preset
-                          ? 'bg-emerald-600 text-white font-bold'
-                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                      }`}
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               <div className="pt-2 flex gap-2.5">
                 <button
                   type="button"
@@ -169,8 +139,7 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
                   Cancel
                 </button>
                 <button
-                  type="button"
-                  onClick={() => handleSave()}
+                  type="submit"
                   disabled={!manualInput.trim()}
                   className="w-2/3 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 py-3 text-xs font-bold text-white shadow-lg active:scale-95 transition disabled:opacity-50"
                 >
@@ -178,7 +147,7 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
                   <span>Set Location & Count</span>
                 </button>
               </div>
-            </div>
+            </form>
           )}
         </div>
       </div>

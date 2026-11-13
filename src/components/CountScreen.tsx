@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Product, Store, InventoryCount, AppUser } from '../types/inventory';
+import React, { useState, useEffect, useRef } from 'react';
+import { Product, Store, InventoryCount, AppUser, ItemCondition } from '../types/inventory';
 import { findProductByCode, getLocalCatalog } from '../services/catalogService';
 import { recordCount } from '../services/offlineSyncService';
 import { BarcodeScanner } from './BarcodeScanner';
@@ -14,14 +14,14 @@ import {
   Minus,
   RotateCcw,
   Search,
-  Sparkles,
-  Tag,
   AlertCircle,
-  Hash,
   Send,
-  SlidersHorizontal,
   MapPin,
   Edit3,
+  X,
+  CloudCheck,
+  Clock,
+  ChevronDown,
 } from 'lucide-react';
 
 interface CountScreenProps {
@@ -44,9 +44,21 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   const [barcodeInput, setBarcodeInput] = useState<string>('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [countedQty, setCountedQty] = useState<string>('1');
+  const [condition, setCondition] = useState<ItemCondition>('Good');
   const [remarks, setRemarks] = useState<string>('');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [submittedConfirmation, setSubmittedConfirmation] = useState<{
+    sku: string;
+    description: string;
+    qty: number;
+    unit: string;
+    condition: ItemCondition;
+    location: string;
+    storeName: string;
+    synced: boolean;
+  } | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
@@ -70,6 +82,14 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       setCatalog(getLocalCatalog());
     }
   }, [externalCatalog]);
+
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) {
+        clearTimeout(confirmTimerRef.current);
+      }
+    };
+  }, []);
 
   // Handle scanned or entered barcode
   const handleBarcodeIdentified = (code: string) => {
@@ -148,6 +168,7 @@ export const CountScreen: React.FC<CountScreenProps> = ({
         barcode: selectedProduct.barcode || cleanBarcode,
         itemDescription: selectedProduct.description,
         countedQuantity: parsedQty,
+        condition,
         remarks: remarks.trim(),
         location: currentLocation,
         date: dateStr,
@@ -158,14 +179,33 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       setItemsInLocationCount((prev) => prev + 1);
       playScanSuccessSound();
 
-      // Show temporary success feedback
-      setSaveSuccessMsg(`Saved: ${selectedProduct.sku} (Qty: ${parsedQty}) at [${currentLocation}]`);
-      setTimeout(() => setSaveSuccessMsg(null), 3000);
+      // Show prominent confirmation notification toast & inline banner
+      const confirmationPayload = {
+        sku: selectedProduct.sku,
+        description: selectedProduct.description,
+        qty: parsedQty,
+        unit: selectedProduct.unit || 'pcs',
+        condition,
+        location: currentLocation,
+        storeName: activeStore.name,
+        synced: record.syncStatus === 'synced',
+      };
+      setSubmittedConfirmation(confirmationPayload);
+      setSaveSuccessMsg(`Saved: ${selectedProduct.sku} (${condition} · Qty: ${parsedQty}) at [${currentLocation}]`);
+
+      if (confirmTimerRef.current) {
+        clearTimeout(confirmTimerRef.current);
+      }
+      confirmTimerRef.current = setTimeout(() => {
+        setSubmittedConfirmation(null);
+        setSaveSuccessMsg(null);
+      }, 4500);
 
       // Reset item inputs for next count (currentLocation is retained!)
       setBarcodeInput('');
       setSelectedProduct(null);
       setCountedQty('1');
+      setCondition('Good');
       setRemarks('');
     } catch (err: unknown) {
       setValidationError('Error saving count. Please verify network or try again.');
@@ -188,6 +228,78 @@ export const CountScreen: React.FC<CountScreenProps> = ({
 
   return (
     <div className="w-full max-w-xl mx-auto pb-24 pt-2 px-3.5 space-y-3.5">
+      {/* Floating Count Submission Confirmation Notification */}
+      {submittedConfirmation && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md rounded-2xl bg-emerald-950/95 backdrop-blur-md border-2 border-emerald-400/70 p-3.5 shadow-2xl shadow-emerald-950/80 text-slate-100 animate-in fade-in slide-in-from-top-3 duration-200"
+        >
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-slate-950 shadow-md">
+                <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
+              </div>
+              <div className="min-w-0 space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-300">
+                    Count Submitted
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                      submittedConfirmation.synced
+                        ? 'bg-emerald-500/20 text-emerald-300'
+                        : 'bg-amber-500/20 text-amber-300'
+                    }`}
+                  >
+                    {submittedConfirmation.synced ? (
+                      <>
+                        <CloudCheck className="w-3 h-3" />
+                        Synced
+                      </>
+                    ) : (
+                      <>
+                        <Clock className="w-3 h-3" />
+                        Queued Offline
+                      </>
+                    )}
+                  </span>
+                </div>
+                <p className="text-sm font-bold text-white truncate">
+                  {submittedConfirmation.sku} · Qty:{' '}
+                  <span className="text-emerald-300 font-mono">
+                    {submittedConfirmation.qty} {submittedConfirmation.unit}
+                  </span>{' '}
+                  <span
+                    className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase align-middle ${
+                      submittedConfirmation.condition === 'Damage'
+                        ? 'bg-rose-500/25 text-rose-300 border border-rose-500/40'
+                        : 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
+                    }`}
+                  >
+                    {submittedConfirmation.condition}
+                  </span>
+                </p>
+                <p className="text-[11px] text-slate-300 truncate">
+                  {submittedConfirmation.description}
+                </p>
+                <p className="text-[10px] text-emerald-300/90 font-mono truncate">
+                  {submittedConfirmation.storeName} · {submittedConfirmation.location}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSubmittedConfirmation(null)}
+              className="rounded-lg p-1 text-slate-400 hover:text-white hover:bg-emerald-900/60 transition shrink-0"
+              aria-label="Dismiss notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Active Store Indicator */}
       <div className="flex items-center justify-between bg-slate-800/80 rounded-xl px-3.5 py-2 border border-slate-700/60 text-xs">
         <div className="flex items-center gap-2">
@@ -200,24 +312,24 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       </div>
 
       {/* Active Location Banner (Sticky across multiple items until changed) */}
-      <div className="rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-emerald-500/30 p-3.5 shadow-md flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
+      <div className="rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-emerald-500/30 p-2.5 sm:p-3.5 shadow-md flex items-center justify-between gap-2 sm:gap-3">
+        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+          <div className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
             <MapPin className="w-4 h-4" />
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0 flex-1">
+            <div className="hidden sm:flex items-center gap-1.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
                 Active Location
               </span>
               <span className="text-[10px] text-slate-500">· Retained for next items</span>
             </div>
-            <div className="flex items-baseline gap-2 mt-0.5">
-              <span className="text-sm font-bold text-white font-mono truncate">
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 sm:mt-0.5">
+              <span className="text-sm font-bold text-white font-mono break-words leading-snug">
                 {currentLocation}
               </span>
               <span className="text-[11px] text-slate-400 font-sans shrink-0">
-                ({itemsInLocationCount} {itemsInLocationCount === 1 ? 'item' : 'items'} counted)
+                ({itemsInLocationCount} {itemsInLocationCount === 1 ? 'item' : 'items'})
               </span>
             </div>
           </div>
@@ -226,11 +338,12 @@ export const CountScreen: React.FC<CountScreenProps> = ({
         <button
           type="button"
           onClick={() => setIsLocationModalOpen(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-200 active:scale-95 transition shrink-0"
+          className="flex items-center gap-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-slate-200 active:scale-95 transition shrink-0 min-h-[36px]"
           title="Change location when finished counting this area"
         >
           <Edit3 className="w-3.5 h-3.5 text-emerald-400" />
-          <span>Change Location</span>
+          <span className="sm:hidden">Change</span>
+          <span className="hidden sm:inline">Change Location</span>
         </button>
       </div>
 
@@ -465,31 +578,94 @@ export const CountScreen: React.FC<CountScreenProps> = ({
         </div>
       </div>
 
+      {/* Item Classification Dropdown (Good / Damage) */}
+      <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-md space-y-2">
+        <label
+          htmlFor="item-condition-select"
+          className="block text-xs font-bold uppercase tracking-wider text-slate-400"
+        >
+          Item Classification <span className="text-emerald-400">*</span>
+        </label>
+        <div className="relative">
+          <select
+            id="item-condition-select"
+            value={condition}
+            onChange={(e) => setCondition(e.target.value as ItemCondition)}
+            className={`w-full h-12 appearance-none rounded-xl border-2 px-3.5 pr-10 text-sm font-bold focus:outline-none transition cursor-pointer ${
+              condition === 'Damage'
+                ? 'border-rose-500/70 bg-rose-950/30 text-rose-300 focus:border-rose-400'
+                : 'border-emerald-500/50 bg-slate-950 text-emerald-300 focus:border-emerald-400'
+            }`}
+          >
+            <option value="Good" className="bg-slate-900 text-emerald-300 font-semibold">
+              Good
+            </option>
+            <option value="Damage" className="bg-slate-900 text-rose-300 font-semibold">
+              Damage
+            </option>
+          </select>
+          <ChevronDown
+            className={`pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 ${
+              condition === 'Damage' ? 'text-rose-400' : 'text-emerald-400'
+            }`}
+          />
+        </div>
+      </div>
+
       {/* Remarks Section */}
       <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-md space-y-2.5">
         <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
-          Remarks / Location Tag (Optional)
+          Remarks (Optional)
         </label>
 
         {/* Quick Remarks Chips */}
         <div className="flex flex-wrap gap-1.5">
-          {['Damaged Packaging', 'Display Model', 'Near Expiry', 'Shelf A1', 'Backroom'].map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              onClick={() => setRemarks(prev => prev ? `${prev}, ${tag}` : tag)}
-              className="rounded-lg bg-slate-800 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-700 hover:text-white transition"
-            >
-              + {tag}
-            </button>
-          ))}
+          {[
+            { code: 'NSC', label: 'No Stock Card', value: 'NSC (No Stock Card)' },
+            { code: 'OST', label: 'Outdated Stock Card', value: 'OST (Outdated Stock Card)' },
+            { code: 'NPT', label: 'No Price Tag', value: 'NPT (No Price Tag)' },
+          ].map((tag) => {
+            const isSelected = remarks
+              .split(',')
+              .map((s) => s.trim())
+              .includes(tag.value);
+            return (
+              <button
+                key={tag.code}
+                type="button"
+                onClick={() => {
+                  setRemarks((prev) => {
+                    const parts = prev
+                      .split(',')
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    if (parts.includes(tag.value)) {
+                      return parts.filter((p) => p !== tag.value).join(', ');
+                    }
+                    return [...parts, tag.value].join(', ');
+                  });
+                }}
+                className={`rounded-lg px-2.5 py-1.5 text-xs border transition active:scale-95 ${
+                  isSelected
+                    ? 'bg-emerald-600/25 border-emerald-500/60 text-emerald-300 font-semibold'
+                    : 'bg-slate-800 border-slate-700/80 text-slate-300 hover:bg-slate-700 hover:text-white'
+                }`}
+              >
+                {isSelected ? '✓ ' : '+ '}
+                <span className="font-bold">{tag.code}</span>{' '}
+                <span className={isSelected ? 'text-emerald-200/90' : 'text-slate-400'}>
+                  ({tag.label})
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         <input
           type="text"
           value={remarks}
           onChange={(e) => setRemarks(e.target.value)}
-          placeholder="e.g. Broken seal, top shelf bin 4..."
+          placeholder="e.g. NSC, OST, NPT or additional notes..."
           className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
         />
       </div>

@@ -153,7 +153,9 @@ export default function App() {
   useEffect(() => {
     if (
       currentUser &&
-      (currentUser.role === 'counter' || currentUser.role === 'supervisor') &&
+      (currentUser.role === 'counter' ||
+        currentUser.role === 'supervisor' ||
+        currentUser.role === 'audit') &&
       currentUser.assignedStoreId &&
       currentUser.assignedStoreId !== 'ALL'
     ) {
@@ -164,6 +166,15 @@ export default function App() {
       }
     }
   }, [currentUser, stores, activeStore.storeId]);
+
+  // Admin users do not have a Count page; Audit users can ONLY access History
+  useEffect(() => {
+    if (currentUser?.role === 'admin' && activeTab === 'count') {
+      setActiveTab('admin');
+    } else if (currentUser?.role === 'audit' && activeTab !== 'history') {
+      setActiveTab('history');
+    }
+  }, [currentUser?.role, activeTab]);
 
   // Real-time cloud subscriptions for catalog, counts, and pending sync flushing
   useEffect(() => {
@@ -200,7 +211,9 @@ export default function App() {
     const canSwitchStore =
       currentUser?.role === 'admin' ||
       currentUser?.role === 'ops_counter' ||
-      currentUser?.role === 'ops_supervisor';
+      currentUser?.role === 'ops_supervisor' ||
+      (currentUser?.role === 'audit' &&
+        (!currentUser.assignedStoreId || currentUser.assignedStoreId === 'ALL'));
     if (!canSwitchStore) {
       return;
     }
@@ -249,7 +262,13 @@ export default function App() {
           setCurrentUser(user);
           setActiveStore(selectedStore);
           setStoredActiveStore(selectedStore);
-          setActiveTab('count');
+          setActiveTab(
+            user.role === 'admin'
+              ? 'admin'
+              : user.role === 'audit'
+              ? 'history'
+              : 'count'
+          );
         }}
       />
     );
@@ -271,7 +290,7 @@ export default function App() {
 
       {/* Main View Area */}
       <main className="flex-1 w-full max-w-4xl mx-auto pt-2">
-        {activeTab === 'count' && (
+        {activeTab === 'count' && currentUser.role !== 'admin' && currentUser.role !== 'audit' && (
           <CountScreen
             currentUser={currentUser}
             activeStore={activeStore}
@@ -288,7 +307,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'supervisor' && (
+        {activeTab === 'supervisor' && currentUser.role !== 'audit' && (
           <SupervisorScreen
             counts={counts}
             stores={stores}
@@ -296,7 +315,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'admin' && (
+        {activeTab === 'admin' && currentUser.role === 'admin' && (
           <AdminScreen
             currentUser={currentUser}
             counts={counts}
@@ -313,26 +332,32 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'catalog' && (
+        {activeTab === 'catalog' && currentUser.role !== 'audit' && (
           <CatalogScreen
             currentUser={currentUser}
             catalog={catalog}
-            onSelectProductForCount={() => {
-              setActiveTab('count');
-            }}
+            onSelectProductForCount={
+              currentUser.role !== 'admin'
+                ? () => {
+                    setActiveTab('count');
+                  }
+                : undefined
+            }
           />
         )}
       </main>
 
       {/* Floating Deployment & Architecture Guide Button */}
-      <button
-        onClick={() => setIsDeployGuideOpen(true)}
-        className="fixed bottom-20 right-4 z-30 flex items-center gap-1.5 rounded-full bg-slate-800/90 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 shadow-lg active:scale-95 transition"
-        title="View Architecture & Deployment Guide"
-      >
-        <HelpCircle className="w-3.5 h-3.5 text-emerald-400" />
-        <span className="hidden sm:inline">Deployment Guide</span>
-      </button>
+      {currentUser.role !== 'audit' && (
+        <button
+          onClick={() => setIsDeployGuideOpen(true)}
+          className="fixed bottom-20 right-4 z-30 flex items-center gap-1.5 rounded-full bg-slate-800/90 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 shadow-lg active:scale-95 transition"
+          title="View Architecture & Deployment Guide"
+        >
+          <HelpCircle className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden sm:inline">Deployment Guide</span>
+        </button>
+      )}
 
       {/* Bottom Ergonomic Navigation Bar */}
       <BottomNav

@@ -190,6 +190,7 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
         'Barcode': c.barcode || '',
         'Item Description': c.itemDescription || '',
         'Counted Quantity': Number(c.countedQuantity),
+        'Classification': c.condition || 'Good',
         'Remarks': c.remarks || '',
         'Date': c.date,
         'Time': c.time,
@@ -211,6 +212,7 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
         { wch: 16 }, // Barcode
         { wch: 32 }, // Item Description
         { wch: 16 }, // Counted Quantity
+        { wch: 14 }, // Classification
         { wch: 25 }, // Remarks
         { wch: 14 }, // Date
         { wch: 12 }, // Time
@@ -457,6 +459,7 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
                   <th className="py-3 px-3">Counter</th>
                   <th className="py-3 px-3">Store</th>
                   <th className="py-3 px-3 text-right">Qty</th>
+                  <th className="py-3 px-3">Condition</th>
                   <th className="py-3 px-3">Date / Time</th>
                   <th className="py-3 px-3">Remarks</th>
                 </tr>
@@ -464,7 +467,7 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
               <tbody className="divide-y divide-slate-800/80 text-slate-200">
                 {filteredSubmissions.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400">
+                    <td colSpan={8} className="py-8 text-center text-slate-400">
                       No inventory counts match the selected criteria.
                     </td>
                   </tr>
@@ -487,6 +490,17 @@ export const SupervisorScreen: React.FC<SupervisorScreenProps> = ({ counts, stor
                       <td className="py-3 px-3 whitespace-nowrap text-slate-300">{c.store}</td>
                       <td className="py-3 px-3 text-right font-mono font-black text-white text-sm tabular-nums">
                         {c.countedQuantity}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <span
+                          className={`inline-block rounded px-2 py-0.5 text-[10px] font-bold uppercase border ${
+                            c.condition === 'Damage'
+                              ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                              : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                          }`}
+                        >
+                          {c.condition || 'Good'}
+                        </span>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap text-slate-400 text-[11px]">
                         {c.date} <span className="text-slate-500">{c.time}</span>

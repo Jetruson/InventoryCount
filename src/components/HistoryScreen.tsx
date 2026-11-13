@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { InventoryCount, Store, AppUser } from '../types/inventory';
+import * as XLSX from 'xlsx';
 import {
   Calendar,
   Search,
@@ -9,6 +10,8 @@ import {
   MapPin,
   Building2,
   UserCheck,
+  FileSpreadsheet,
+  Download,
 } from 'lucide-react';
 
 interface HistoryScreenProps {
@@ -20,13 +23,19 @@ interface HistoryScreenProps {
 export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStore, currentUser }) => {
   const role = currentUser?.role || 'counter';
   const isCounterRole = role === 'counter' || role === 'ops_counter';
-  const canSwitchStores = role === 'admin' || role === 'ops_supervisor' || role === 'ops_counter';
+  const isAuditRole = role === 'audit';
+  const canSwitchStores =
+    role === 'admin' ||
+    role === 'ops_supervisor' ||
+    role === 'ops_counter' ||
+    (isAuditRole && (!currentUser?.assignedStoreId || currentUser.assignedStoreId === 'ALL'));
 
   const [skuFilter, setSkuFilter] = useState('');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'yesterday' | 'week'>('all');
   const [storeFilter, setStoreFilter] = useState<'all' | 'current'>(
     canSwitchStores ? 'all' : 'current'
   );
+  const [extractNotice, setExtractNotice] = useState<string | null>(null);
 
   const todayStr = new Date().toISOString().split('T')[0];
   const yesterday = new Date();
@@ -104,6 +113,91 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
     return filteredCounts.reduce((acc, curr) => acc + (Number(curr.countedQuantity) || 0), 0);
   }, [filteredCounts]);
 
+  const handleExtractExcel = () => {
+    if (filteredCounts.length === 0) return;
+    try {
+      const rows = filteredCounts.map((c, idx) => ({
+        '#': idx + 1,
+        'Count ID': c.id,
+        Date: c.date,
+        Time: c.time,
+        Store: c.store,
+        'Store ID': c.storeId || '',
+        'Shelf/Bin Location': c.location || '—',
+        SKU: c.sku,
+        Barcode: c.barcode || '',
+        'Item Description': c.itemDescription || '',
+        'Counted Quantity': Number(c.countedQuantity) || 0,
+        Classification: c.condition || 'Good',
+        Remarks: c.remarks || '',
+        'Counter Username': c.username,
+        'User ID': c.userId,
+        'Sync Status': c.syncStatus || 'synced',
+      }));
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = [
+        { wch: 6 },
+        { wch: 22 },
+        { wch: 12 },
+        { wch: 10 },
+        { wch: 22 },
+        { wch: 12 },
+        { wch: 20 },
+        { wch: 18 },
+        { wch: 16 },
+        { wch: 36 },
+        { wch: 16 },
+        { wch: 14 },
+        { wch: 24 },
+        { wch: 18 },
+        { wch: 24 },
+        { wch: 12 },
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, 'Audit Counts');
+
+      const dateTag = new Date().toISOString().split('T')[0];
+      const filename = `Audit_Count_Extract_${dateTag}.xlsx`;
+      XLSX.writeFile(wb, filename);
+      setExtractNotice(`Extracted ${filteredCounts.length} records to ${filename}`);
+    } catch (err) {
+      console.error('Excel extract error:', err);
+    }
+  };
+
+  const handleExtractCSV = () => {
+    if (filteredCounts.length === 0) return;
+    try {
+      const rows = filteredCounts.map((c) => ({
+        Date: c.date,
+        Time: c.time,
+        Store: c.store,
+        StoreID: c.storeId || '',
+        Location: c.location || '',
+        SKU: c.sku,
+        Barcode: c.barcode || '',
+        Description: c.itemDescription || '',
+        CountedQuantity: Number(c.countedQuantity) || 0,
+        Classification: c.condition || 'Good',
+        Remarks: c.remarks || '',
+        Username: c.username,
+        UserID: c.userId,
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Counts');
+
+      const dateTag = new Date().toISOString().split('T')[0];
+      const filename = `Audit_Count_Extract_${dateTag}.csv`;
+      XLSX.writeFile(wb, filename, { bookType: 'csv' });
+      setExtractNotice(`Extracted ${filteredCounts.length} records to ${filename}`);
+    } catch (err) {
+      console.error('CSV extract error:', err);
+    }
+  };
+
   return (
     <div className="w-full max-w-2xl mx-auto pb-24 pt-2 px-3.5 space-y-4">
       {/* Header Summary Strip */}
@@ -115,6 +209,11 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
               <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 border border-emerald-500/25 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">
                 <UserCheck className="w-3 h-3" />
                 My Counts Only
+              </span>
+            )}
+            {isAuditRole && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-indigo-500/15 border border-indigo-500/30 px-1.5 py-0.5 text-[10px] font-bold text-indigo-300">
+                Audit View · Read & Extract
               </span>
             )}
           </div>
@@ -130,6 +229,47 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
           </div>
         </div>
       </div>
+
+      {/* Audit User Count Extraction Bar */}
+      {isAuditRole && (
+        <div className="rounded-2xl bg-gradient-to-r from-indigo-950/60 to-slate-900 border border-indigo-500/30 p-4 shadow-md space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div>
+              <h3 className="text-sm font-bold text-white">Extract Count History</h3>
+              <p className="text-[11px] text-slate-400">
+                Download filtered count records ({filteredCounts.length} matching)
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExtractExcel}
+                disabled={filteredCounts.length === 0}
+                className="flex-1 sm:flex-none h-10 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-md active:scale-95 transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Excel (.xlsx)</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleExtractCSV}
+                disabled={filteredCounts.length === 0}
+                className="flex-1 sm:flex-none h-10 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white shadow-md active:scale-95 transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                <span>CSV (.csv)</span>
+              </button>
+            </div>
+          </div>
+
+          {extractNotice && (
+            <div className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3 py-2 text-xs font-semibold text-emerald-300 flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span>{extractNotice}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filter Controls */}
       <div className="rounded-2xl bg-slate-900 border border-slate-800 p-3.5 shadow-md space-y-3">
@@ -231,6 +371,15 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ counts, activeStor
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="rounded-md bg-slate-800 border border-slate-700 px-2 py-0.5 font-mono text-xs font-bold text-emerald-400">
                       {item.sku}
+                    </span>
+                    <span
+                      className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase border ${
+                        item.condition === 'Damage'
+                          ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                          : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                      }`}
+                    >
+                      {item.condition || 'Good'}
                     </span>
                     <span className="text-xs text-slate-400">· {item.store}</span>
                     {item.location && (

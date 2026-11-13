@@ -1,3 +1,5 @@
+export type ItemCondition = 'Good' | 'Damage';
+
 export interface InventoryCount {
   id: string;
   username: string;
@@ -8,6 +10,7 @@ export interface InventoryCount {
   barcode: string;
   itemDescription: string;
   countedQuantity: number;
+  condition?: ItemCondition;
   remarks: string;
   location?: string; // Shelf, Aisle, Bin, or Bay barcode/code
   date: string; // YYYY-MM-DD
@@ -32,7 +35,7 @@ export interface Store {
   location: string;
 }
 
-export type UserRole = 'counter' | 'ops_counter' | 'supervisor' | 'ops_supervisor' | 'admin';
+export type UserRole = 'counter' | 'ops_counter' | 'supervisor' | 'ops_supervisor' | 'audit' | 'admin';
 
 export interface AppUser {
   uid: string;

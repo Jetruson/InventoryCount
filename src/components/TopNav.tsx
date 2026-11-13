@@ -28,6 +28,8 @@ function getRoleDisplayLabel(role: UserRole): string {
       return 'Store Supervisor';
     case 'ops_counter':
       return 'Operations Counter';
+    case 'audit':
+      return 'Audit User';
     case 'counter':
     default:
       return 'Store Counter';
@@ -47,7 +49,8 @@ export const TopNav: React.FC<TopNavProps> = ({
   const canSwitchStore =
     user.role === 'admin' ||
     user.role === 'ops_counter' ||
-    user.role === 'ops_supervisor';
+    user.role === 'ops_supervisor' ||
+    (user.role === 'audit' && (!user.assignedStoreId || user.assignedStoreId === 'ALL'));
 
   return (
     <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-3 py-2">
@@ -75,6 +78,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                   ? 'border-purple-500/30'
                   : user.role === 'ops_supervisor'
                   ? 'border-cyan-500/30'
+                  : user.role === 'audit'
+                  ? 'border-indigo-500/30'
                   : 'border-teal-500/30'
               }`}
               title="Switch Store Location"
@@ -86,6 +91,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                       ? 'text-purple-400'
                       : user.role === 'ops_supervisor'
                       ? 'text-cyan-400'
+                      : user.role === 'audit'
+                      ? 'text-indigo-400'
                       : 'text-teal-400'
                   }`}
                 />
@@ -139,12 +146,16 @@ export const TopNav: React.FC<TopNavProps> = ({
                       ? 'text-purple-400'
                       : user.role === 'ops_supervisor'
                       ? 'text-cyan-400'
+                      : user.role === 'audit'
+                      ? 'text-indigo-400'
                       : 'text-teal-400'
                   }`}
                 >
                   <span>
                     {user.role === 'admin'
                       ? 'Switch Retail Store (Admin)'
+                      : user.role === 'audit'
+                      ? 'Filter Retail Store (Audit)'
                       : 'Select Store to Count (Ops)'}
                   </span>
                   <span className="text-[9px] text-slate-400 font-normal">{stores.length} stores</span>
@@ -241,6 +252,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                             ? 'bg-amber-500/15 text-amber-400'
                             : user.role === 'ops_counter'
                             ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                            : user.role === 'audit'
+                            ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
                             : 'bg-emerald-500/15 text-emerald-400'
                         }`}
                       >
