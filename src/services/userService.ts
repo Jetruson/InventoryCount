@@ -1,7 +1,7 @@
 import { AppUser, ManagedUser } from '../types/inventory';
 import { auth, db } from '../firebase/config';
 import { EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
-import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot, query, limit } from 'firebase/firestore';
 
 export const DEFAULT_MANAGED_USERS: ManagedUser[] = [
   {
@@ -149,8 +149,9 @@ export function subscribeToManagedUsers(onUpdate: (users: ManagedUser[]) => void
 
 export async function seedUsersIfEmpty(): Promise<void> {
   try {
-    const snapshot = await getDocs(collection(db, 'managed_users'));
-    if (snapshot.empty) {
+    if (localStorage.getItem(OPS_SEEDED_KEY) === 'true') return;
+    const checkSnap = await getDocs(query(collection(db, 'managed_users'), limit(1)));
+    if (checkSnap.empty) {
       for (const u of DEFAULT_MANAGED_USERS) {
         await setDoc(doc(db, 'managed_users', u.id), u);
       }
@@ -159,15 +160,14 @@ export async function seedUsersIfEmpty(): Promise<void> {
     }
 
     // Ensure default Operations role sample accounts exist once on upgrade if not already seeded
-    if (localStorage.getItem(OPS_SEEDED_KEY) !== 'true') {
-      const existingIds = new Set(snapshot.docs.map(d => d.id));
-      for (const u of DEFAULT_MANAGED_USERS) {
-        if ((u.role === 'ops_counter' || u.role === 'ops_supervisor') && !existingIds.has(u.id)) {
-          await setDoc(doc(db, 'managed_users', u.id), u);
-        }
+    const snapshot = await getDocs(collection(db, 'managed_users'));
+    const existingIds = new Set(snapshot.docs.map(d => d.id));
+    for (const u of DEFAULT_MANAGED_USERS) {
+      if ((u.role === 'ops_counter' || u.role === 'ops_supervisor') && !existingIds.has(u.id)) {
+        await setDoc(doc(db, 'managed_users', u.id), u);
       }
-      localStorage.setItem(OPS_SEEDED_KEY, 'true');
     }
+    localStorage.setItem(OPS_SEEDED_KEY, 'true');
   } catch (e) {
     console.warn('Managed users seeding skipped or offline:', e);
   }

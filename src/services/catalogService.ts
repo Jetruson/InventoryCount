@@ -8,6 +8,8 @@ import {
   deleteDoc,
   onSnapshot,
   writeBatch,
+  query,
+  limit,
 } from 'firebase/firestore';
 
 export const SEED_PRODUCTS: Product[] = [
@@ -156,7 +158,7 @@ export function saveLocalCatalog(products: Product[], markCustomized = false): v
 export async function seedCatalogIfEmpty(): Promise<void> {
   try {
     if (localStorage.getItem(LOCAL_CATALOG_CUSTOMIZED_KEY) === 'true') return;
-    const snapshot = await getDocs(collection(db, 'products'));
+    const snapshot = await getDocs(query(collection(db, 'products'), limit(1)));
     if (snapshot.empty) {
       const batch = writeBatch(db);
       for (const p of SEED_PRODUCTS) {
@@ -172,6 +174,7 @@ export async function seedCatalogIfEmpty(): Promise<void> {
       }
       await batch.commit();
     }
+    localStorage.setItem(LOCAL_CATALOG_CUSTOMIZED_KEY, 'true');
   } catch (e) {
     console.warn('Catalog seeding skipped or offline:', e);
   }

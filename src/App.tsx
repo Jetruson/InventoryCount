@@ -34,7 +34,7 @@ import {
   subscribeToAuditLogs,
 } from './services/auditService';
 import {
-  fetchCatalog,
+  getLocalCatalog,
   subscribeToCatalog,
   seedCatalogIfEmpty,
 } from './services/catalogService';
@@ -213,12 +213,16 @@ export default function App() {
     }
   }, [currentUser?.role, activeTab]);
 
-  // Real-time cloud subscriptions for catalog, counts, correction requests, audit logs, and legacy migration
+  // Real-time cloud subscriptions scoped by role to avoid redundant Firestore reads
+  const userId = currentUser?.uid;
+  const userRole = currentUser?.role;
   useEffect(() => {
-    if (!currentUser) return;
+    if (!userId || !userRole) return;
 
     seedUsersIfEmpty();
-    seedCatalogIfEmpty();
+    if (userRole !== 'audit') {
+      seedCatalogIfEmpty();
+    }
     migrateLegacyCountRecords();
 
     // Immediately flush any pending offline counts from this device
@@ -230,17 +234,26 @@ export default function App() {
       setCounts(liveCounts);
     });
 
-    const unsubCatalog = subscribeToCatalog((liveCatalog) => {
-      setCatalog(liveCatalog);
-    });
+    const unsubCatalog =
+      userRole !== 'audit'
+        ? subscribeToCatalog((liveCatalog) => {
+            setCatalog(liveCatalog);
+          })
+        : () => {};
 
-    const unsubRequests = subscribeToCorrectionRequests((liveRequests) => {
-      setCorrectionRequests(liveRequests);
-    });
+    const unsubRequests =
+      userRole !== 'admin'
+        ? subscribeToCorrectionRequests((liveRequests) => {
+            setCorrectionRequests(liveRequests);
+          })
+        : () => {};
 
-    const unsubAuditLogs = subscribeToAuditLogs((liveLogs) => {
-      setAuditLogs(liveLogs);
-    });
+    const unsubAuditLogs =
+      userRole === 'audit'
+        ? subscribeToAuditLogs((liveLogs) => {
+            setAuditLogs(liveLogs);
+          })
+        : () => {};
 
     const unsubSync = subscribeToSyncStatus((status) => {
       setPendingSyncCount(status.pendingCount);
@@ -253,7 +266,7 @@ export default function App() {
       unsubAuditLogs();
       unsubSync();
     };
-  }, [currentUser]);
+  }, [userId, userRole]);
 
   const pendingRequestsCount = useMemo(() => {
     if (!currentUser) return 0;
@@ -426,7 +439,7 @@ export default function App() {
             counts={counts}
             stores={stores}
             catalog={catalog}
-            onCatalogUpdated={() => fetchCatalog().then(setCatalog)}
+            onCatalogUpdated={() => setCatalog(getLocalCatalog())}
             onStoresUpdated={(updatedStores) => {
               setStores(updatedStores);
               if (!updatedStores.some((s) => s.storeId === activeStore.storeId) && updatedStores.length > 0) {

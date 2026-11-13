@@ -1,6 +1,6 @@
 import { Store } from '../types/inventory';
 import { db } from '../firebase/config';
-import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, onSnapshot, query, limit } from 'firebase/firestore';
 
 export const DEFAULT_STORES: Store[] = [
   { storeId: 'ST-101', name: 'Downtown Flagship', location: '100 Main Street' },
@@ -114,14 +114,18 @@ export function subscribeToStores(onUpdate: (stores: Store[]) => void): () => vo
   }
 }
 
+const STORES_SEEDED_KEY = 'inventory_count_stores_seeded';
+
 export async function seedStoresIfEmpty(): Promise<void> {
   try {
-    const snapshot = await getDocs(collection(db, 'stores'));
+    if (localStorage.getItem(STORES_SEEDED_KEY) === 'true') return;
+    const snapshot = await getDocs(query(collection(db, 'stores'), limit(1)));
     if (snapshot.empty) {
       for (const st of DEFAULT_STORES) {
         await setDoc(doc(db, 'stores', st.storeId), st);
       }
     }
+    localStorage.setItem(STORES_SEEDED_KEY, 'true');
   } catch (e) {
     console.warn('Store seeding skipped or offline:', e);
   }
