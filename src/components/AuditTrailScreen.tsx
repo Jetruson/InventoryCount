@@ -48,6 +48,9 @@ const ACTION_LABELS: Record<AuditActionType, string> = {
   RECORD_VOIDED: 'Record Voided',
   VOID_REJECTED: 'Void Rejected',
   COUNTS_PURGED: 'Counts Deleted (Admin)',
+  LOCATION_DONE_SUBMITTED: 'Location Done (Verify Req)',
+  LOCATION_VERIFIED: 'Location Verified',
+  LOCATION_RECOUNT_FLAGGED: 'Location Recount Flagged',
 };
 
 export const AuditTrailScreen: React.FC<AuditTrailScreenProps> = ({
@@ -568,16 +571,19 @@ export const AuditTrailScreen: React.FC<AuditTrailScreenProps> = ({
                       className={`rounded-md px-2 py-0.5 text-[10px] font-black uppercase border ${
                         log.action === 'RECORD_VOIDED' ||
                         log.action === 'VOID_REQUESTED' ||
-                        log.action === 'COUNTS_PURGED'
+                        log.action === 'COUNTS_PURGED' ||
+                        log.action === 'LOCATION_RECOUNT_FLAGGED'
                           ? 'bg-rose-500/20 border-rose-500/30 text-rose-300'
                           : log.action === 'CORRECTION_APPROVED' ||
                             log.action === 'QUANTITY_CHANGED' ||
                             log.action === 'LOCATION_CHANGED' ||
-                            log.action === 'ITEM_DETAILS_CHANGED'
+                            log.action === 'ITEM_DETAILS_CHANGED' ||
+                            log.action === 'LOCATION_VERIFIED'
                           ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
                           : log.action === 'CORRECTION_REJECTED' || log.action === 'VOID_REJECTED'
                           ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
-                          : log.action === 'CORRECTION_REQUESTED'
+                          : log.action === 'CORRECTION_REQUESTED' ||
+                            log.action === 'LOCATION_DONE_SUBMITTED'
                           ? 'bg-amber-500/20 border-amber-500/30 text-amber-300'
                           : 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300'
                       }`}

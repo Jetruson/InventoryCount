@@ -5,7 +5,9 @@ import {
   AppUser,
   CorrectionRequest,
   CorrectionRequestType,
+  LocationVerification,
 } from '../types/inventory';
+import { getLocationVerificationId } from '../services/locationVerificationService';
 import { CorrectionRequestModal } from './CorrectionRequestModal';
 import * as XLSX from 'xlsx';
 import {
@@ -30,6 +32,7 @@ interface HistoryScreenProps {
   activeStore: Store;
   currentUser?: AppUser;
   correctionRequests?: CorrectionRequest[];
+  locationVerifications?: LocationVerification[];
 }
 
 export const HistoryScreen: React.FC<HistoryScreenProps> = ({
@@ -37,6 +40,7 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
   activeStore,
   currentUser,
   correctionRequests = [],
+  locationVerifications = [],
 }) => {
   const role = currentUser?.role || 'counter';
   const isCounterRole = role === 'counter' || role === 'ops_counter';
@@ -478,10 +482,44 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
                       </span>
                       <span className="text-xs text-slate-400">· {item.store}</span>
                       {item.location && (
-                        <span className="flex items-center gap-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 font-mono text-[11px] text-emerald-300">
-                          <MapPin className="w-3 h-3 text-emerald-400" />
-                          {item.location}
-                        </span>
+                        <>
+                          <span className="flex items-center gap-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 font-mono text-[11px] text-emerald-300">
+                            <MapPin className="w-3 h-3 text-emerald-400" />
+                            {item.location}
+                          </span>
+                          {(() => {
+                            const verId = getLocationVerificationId(
+                              item.storeId || activeStore.storeId,
+                              item.location
+                            );
+                            const locVer = locationVerifications.find(
+                              (v) =>
+                                v.id === verId ||
+                                (v.storeId === (item.storeId || activeStore.storeId) &&
+                                  v.location.trim().toLowerCase() === item.location?.trim().toLowerCase())
+                            );
+                            if (!locVer) return null;
+                            if (locVer.status === 'verified' || locVer.doneCounting) {
+                              return (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/20 border border-emerald-500/40 px-1.5 py-0.5 text-[9px] font-black uppercase text-emerald-200">
+                                  Done Counting
+                                </span>
+                              );
+                            }
+                            if (locVer.status === 'pending_verification') {
+                              return (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-300">
+                                  Pending Check
+                                </span>
+                              );
+                            }
+                            return (
+                              <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/15 border border-rose-500/30 px-1.5 py-0.5 text-[9px] font-bold uppercase text-rose-300">
+                                Recount Needed
+                              </span>
+                            );
+                          })()}
+                        </>
                       )}
                     </div>
                     <h4

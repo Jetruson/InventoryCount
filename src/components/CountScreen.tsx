@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Product, Store, InventoryCount, AppUser, ItemCondition } from '../types/inventory';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Product, Store, InventoryCount, AppUser, ItemCondition, LocationVerification } from '../types/inventory';
 import { findProductByCode, getLocalCatalog } from '../services/catalogService';
 import { recordCount } from '../services/offlineSyncService';
+import {
+  getLocationVerificationId,
+  submitLocationForVerification,
+} from '../services/locationVerificationService';
 import { BarcodeScanner } from './BarcodeScanner';
 import { AddProductModal } from './AddProductModal';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -22,12 +26,17 @@ import {
   CloudCheck,
   Clock,
   ChevronDown,
+  ClipboardCheck,
+  AlertTriangle,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface CountScreenProps {
   currentUser: AppUser;
   activeStore: Store;
   catalog?: Product[];
+  counts?: InventoryCount[];
+  locationVerifications?: LocationVerification[];
   onCountSaved: (savedCount: InventoryCount) => void;
 }
 
@@ -35,6 +44,8 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   currentUser,
   activeStore,
   catalog: externalCatalog,
+  counts = [],
+  locationVerifications = [],
   onCountSaved,
 }) => {
   const [catalog, setCatalog] = useState<Product[]>(() =>
@@ -68,9 +79,10 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
+  const isSupervisorUser =
+    currentUser.role === 'supervisor' || currentUser.role === 'ops_supervisor';
   const canAddSku =
-    currentUser.role === 'supervisor' ||
-    currentUser.role === 'ops_supervisor' ||
+    isSupervisorUser ||
     currentUser.role === 'admin';
 
   // Sticky location state retained across multiple counted items
@@ -79,6 +91,69 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   });
   const [itemsInLocationCount, setItemsInLocationCount] = useState<number>(0);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState<boolean>(false);
+  const [isVerifyModalOpen, setIsVerifyModalOpen] = useState<boolean>(false);
+  const [counterVerifyNotes, setCounterVerifyNotes] = useState<string>('');
+  const [isSubmittingVerification, setIsSubmittingVerification] = useState<boolean>(false);
+  const [verifySubmitError, setVerifySubmitError] = useState<string | null>(null);
+
+  const countsInCurrentLocation = useMemo(() => {
+    const locLower = currentLocation.trim().toLowerCase();
+    return counts.filter((c) => {
+      if (c.status === 'voided') return false;
+      const sameStore =
+        c.storeId === activeStore.storeId ||
+        c.store.toLowerCase() === activeStore.name.toLowerCase();
+      const sameLoc = (c.location || '').trim().toLowerCase() === locLower;
+      return sameStore && sameLoc;
+    });
+  }, [counts, activeStore, currentLocation]);
+
+  const currentLocationUnits = useMemo(
+    () => countsInCurrentLocation.reduce((sum, c) => sum + (Number(c.countedQuantity) || 0), 0),
+    [countsInCurrentLocation]
+  );
+
+  const currentLocationVerification = useMemo(() => {
+    const expectedId = getLocationVerificationId(activeStore.storeId, currentLocation);
+    return (
+      locationVerifications.find((v) => v.id === expectedId) ||
+      locationVerifications.find(
+        (v) =>
+          v.storeId === activeStore.storeId &&
+          v.location.trim().toLowerCase() === currentLocation.trim().toLowerCase()
+      )
+    );
+  }, [locationVerifications, activeStore.storeId, currentLocation]);
+
+  const isLocationDoneCounting =
+    currentLocationVerification?.status === 'verified' ||
+    currentLocationVerification?.doneCounting === true;
+  const isCountBlockedForUser = isLocationDoneCounting && !isSupervisorUser;
+
+  const handleSubmitLocationForVerification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVerifySubmitError(null);
+    setIsSubmittingVerification(true);
+    try {
+      await submitLocationForVerification({
+        store: activeStore,
+        location: currentLocation,
+        countsForLocation: countsInCurrentLocation,
+        user: currentUser,
+        counterNotes: counterVerifyNotes,
+      });
+      setIsVerifyModalOpen(false);
+      setCounterVerifyNotes('');
+      setSaveSuccessMsg(
+        `Location "${currentLocation}" submitted for Supervisor verification (${countsInCurrentLocation.length} items, ${currentLocationUnits} units).`
+      );
+      setTimeout(() => setSaveSuccessMsg(null), 4500);
+    } catch (err: any) {
+      setVerifySubmitError(err?.message || 'Could not submit location for verification.');
+    } finally {
+      setIsSubmittingVerification(false);
+    }
+  };
 
   // Sync catalog whenever App.tsx pushes a real-time Firestore catalog update
   useEffect(() => {
@@ -135,6 +210,14 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   // Submit count
   const handleSaveCount = async () => {
     setValidationError(null);
+
+    if (isCountBlockedForUser) {
+      setValidationError(
+        `Location "${currentLocation}" is verified and tagged as Done Counting. Please switch to another location to count.`
+      );
+      playScanErrorSound();
+      return;
+    }
 
     // 1. Validation: Barcode cannot be blank
     const cleanBarcode = barcodeInput.trim();
@@ -317,39 +400,116 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       </div>
 
       {/* Active Location Banner (Sticky across multiple items until changed) */}
-      <div className="rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-emerald-500/30 p-2.5 sm:p-3.5 shadow-md flex items-center justify-between gap-2 sm:gap-3">
-        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
-          <div className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
-            <MapPin className="w-4 h-4" />
+      <div className="rounded-2xl bg-gradient-to-r from-slate-900 to-slate-950 border border-emerald-500/30 p-3 shadow-md space-y-2.5">
+        <div className="flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+            <div className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
+              <MapPin className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="hidden sm:flex items-center gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                  Active Location
+                </span>
+                <span className="text-[10px] text-slate-500">· Retained for next items</span>
+              </div>
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 sm:mt-0.5">
+                <span className="text-sm font-bold text-white font-mono break-words leading-snug">
+                  {currentLocation}
+                </span>
+                {isLocationDoneCounting && (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/20 border border-emerald-500/40 px-1.5 py-0.5 text-[10px] font-black uppercase text-emerald-300">
+                    Done Counting
+                  </span>
+                )}
+                <span className="text-[11px] text-slate-400 font-sans shrink-0">
+                  ({countsInCurrentLocation.length || itemsInLocationCount}{' '}
+                  {(countsInCurrentLocation.length || itemsInLocationCount) === 1 ? 'item' : 'items'})
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="hidden sm:flex items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                Active Location
-              </span>
-              <span className="text-[10px] text-slate-500">· Retained for next items</span>
-            </div>
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 sm:mt-0.5">
-              <span className="text-sm font-bold text-white font-mono break-words leading-snug">
-                {currentLocation}
-              </span>
-              <span className="text-[11px] text-slate-400 font-sans shrink-0">
-                ({itemsInLocationCount} {itemsInLocationCount === 1 ? 'item' : 'items'})
-              </span>
-            </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {!isLocationDoneCounting && (
+              <button
+                type="button"
+                onClick={() => {
+                  setVerifySubmitError(null);
+                  setCounterVerifyNotes('');
+                  setIsVerifyModalOpen(true);
+                }}
+                disabled={countsInCurrentLocation.length === 0}
+                className="flex items-center gap-1.5 rounded-xl bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/40 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-amber-300 active:scale-95 transition shrink-0 min-h-[36px] disabled:opacity-40"
+                title="Mark this location as done and notify Supervisor to check"
+              >
+                <ClipboardCheck className="w-3.5 h-3.5 text-amber-400" />
+                <span className="sm:hidden">Done</span>
+                <span className="hidden sm:inline">Done Location</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setIsLocationModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-slate-200 active:scale-95 transition shrink-0 min-h-[36px]"
+              title="Change location when finished counting this area"
+            >
+              <Edit3 className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="sm:hidden">Change</span>
+              <span className="hidden sm:inline">Change Location</span>
+            </button>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setIsLocationModalOpen(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-slate-200 active:scale-95 transition shrink-0 min-h-[36px]"
-          title="Change location when finished counting this area"
-        >
-          <Edit3 className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="sm:hidden">Change</span>
-          <span className="hidden sm:inline">Change Location</span>
-        </button>
+        {/* Live Location Verification Status Bar */}
+        {currentLocationVerification && (
+          <div
+            className={`rounded-xl px-3 py-2 text-xs flex items-start gap-2 border ${
+              currentLocationVerification.status === 'verified'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : currentLocationVerification.status === 'recount_needed'
+                ? 'bg-rose-500/15 border-rose-500/40 text-rose-200'
+                : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+            }`}
+          >
+            {currentLocationVerification.status === 'verified' ? (
+              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            ) : currentLocationVerification.status === 'recount_needed' ? (
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            ) : (
+              <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            )}
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="font-bold flex flex-wrap items-center gap-x-2">
+                <span>
+                  {currentLocationVerification.status === 'verified'
+                    ? `Tagged Done Counting · Verified by ${currentLocationVerification.verifiedByName}`
+                    : currentLocationVerification.status === 'recount_needed'
+                    ? `Recount Flagged by ${currentLocationVerification.verifiedByName}`
+                    : `Pending Supervisor Check (Submitted by ${currentLocationVerification.submittedByName})`}
+                </span>
+                <span className="text-[10px] font-normal opacity-80">
+                  {currentLocationVerification.status === 'pending_verification'
+                    ? `${currentLocationVerification.submittedDate} ${currentLocationVerification.submittedTime}`
+                    : `${currentLocationVerification.verifiedDate || ''} ${currentLocationVerification.verifiedTime || ''}`}
+                </span>
+              </div>
+              {currentLocationVerification.status === 'verified' && (
+                <p className="text-[11px] text-emerald-200/90">
+                  {isSupervisorUser
+                    ? 'Tagged Done Counting — Supervisor Override active: you can still add counts to this location.'
+                    : 'Counting is closed for this location. Tap "Change Location" to move to your next shelf or bin.'}
+                </p>
+              )}
+              {currentLocationVerification.supervisorNotes && (
+                <p className="text-[11px] opacity-90">
+                  Supervisor note: {currentLocationVerification.supervisorNotes}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Mode Switcher: Camera Scanner vs Manual Keypad Entry */}
@@ -685,11 +845,19 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       <div className="pt-2">
         <button
           onClick={handleSaveCount}
-          disabled={isSaving}
-          className="w-full h-14 rounded-2xl bg-emerald-600 text-base font-bold text-white shadow-xl shadow-emerald-950 hover:bg-emerald-500 active:scale-98 transition flex items-center justify-center gap-2.5"
+          disabled={isSaving || isCountBlockedForUser}
+          className="w-full h-14 rounded-2xl bg-emerald-600 text-base font-bold text-white shadow-xl shadow-emerald-950 hover:bg-emerald-500 active:scale-98 transition flex items-center justify-center gap-2.5 disabled:opacity-50"
         >
           <Send className="w-5 h-5" />
-          <span>{isSaving ? 'Recording Count...' : 'SAVE COUNT'}</span>
+          <span>
+            {isCountBlockedForUser
+              ? 'Location Done Counting — Switch Location'
+              : isSaving
+              ? 'Recording Count...'
+              : isLocationDoneCounting && isSupervisorUser
+              ? 'SAVE COUNT (DONE LOCATION)'
+              : 'SAVE COUNT'}
+          </span>
         </button>
       </div>
 
@@ -709,9 +877,125 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       <LocationPickerModal
         isOpen={isLocationModalOpen}
         currentLocation={currentLocation}
+        activeStoreId={activeStore.storeId}
+        locationVerifications={locationVerifications}
+        canOverrideDoneLocation={isSupervisorUser}
         onClose={() => setIsLocationModalOpen(false)}
         onSelectLocation={handleLocationChanged}
       />
+
+      {/* Submit Location for Supervisor Verification Modal */}
+      {isVerifyModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-3">
+          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-amber-500/40 p-5 shadow-2xl text-slate-100 animate-in fade-in zoom-in-95 duration-100 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <ClipboardCheck className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-white">Done with Location?</h3>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {activeStore.name} · {currentLocation}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsVerifyModalOpen(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 shrink-0">
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-2.5 text-center">
+                <span className="text-[10px] uppercase text-slate-400 block">Counted Items</span>
+                <span className="text-lg font-black text-white font-mono">
+                  {countsInCurrentLocation.length}
+                </span>
+              </div>
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-2.5 text-center">
+                <span className="text-[10px] uppercase text-slate-400 block">Total Units</span>
+                <span className="text-lg font-black text-emerald-400 font-mono">
+                  {currentLocationUnits.toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto rounded-xl bg-slate-950 border border-slate-800 divide-y divide-slate-800/80 min-h-[100px] max-h-52">
+              {countsInCurrentLocation.map((item) => (
+                <div key={item.id} className="px-3 py-2 flex items-center justify-between gap-2 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono font-bold text-emerald-400">{item.sku}</span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${
+                          item.condition === 'Damage'
+                            ? 'bg-rose-500/20 text-rose-300'
+                            : 'bg-emerald-500/20 text-emerald-300'
+                        }`}
+                      >
+                        {item.condition || 'Good'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 truncate">
+                      {item.itemDescription} · by {item.username}
+                    </p>
+                  </div>
+                  <span className="font-mono font-black text-white text-sm shrink-0">
+                    {item.countedQuantity}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {verifySubmitError && (
+              <div className="rounded-xl bg-rose-500/15 border border-rose-500/30 p-2.5 text-xs text-rose-300 font-medium shrink-0">
+                {verifySubmitError}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitLocationForVerification} className="space-y-3 shrink-0">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Notes for Supervisor (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={counterVerifyNotes}
+                  onChange={(e) => setCounterVerifyNotes(e.target.value)}
+                  placeholder="e.g. All shelves and lower bins counted..."
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-amber-400 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsVerifyModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-semibold text-slate-300 hover:text-white"
+                >
+                  Keep Counting
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingVerification || countsInCurrentLocation.length === 0}
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-xs font-bold text-white shadow-md active:scale-95 transition disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <ClipboardCheck className="w-3.5 h-3.5" />
+                  <span>
+                    {isSubmittingVerification
+                      ? 'Submitting...'
+                      : currentLocationVerification
+                      ? 'Re-submit to Supervisor'
+                      : 'Submit for Supervisor Check'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

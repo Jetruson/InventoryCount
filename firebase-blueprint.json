@@ -262,7 +262,7 @@
         "newValue": { "type": "string", "description": "After-change snapshot summary" },
         "action": {
           "type": "string",
-          "enum": ["COUNT_SUBMITTED", "CORRECTION_REQUESTED", "VOID_REQUESTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "QUANTITY_CHANGED", "LOCATION_CHANGED", "ITEM_DETAILS_CHANGED", "RECORD_VOIDED", "VOID_REJECTED", "COUNTS_PURGED"],
+          "enum": ["COUNT_SUBMITTED", "CORRECTION_REQUESTED", "VOID_REQUESTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "QUANTITY_CHANGED", "LOCATION_CHANGED", "ITEM_DETAILS_CHANGED", "RECORD_VOIDED", "VOID_REJECTED", "COUNTS_PURGED", "LOCATION_DONE_SUBMITTED", "LOCATION_VERIFIED", "LOCATION_RECOUNT_FLAGGED"],
           "description": "Action performed"
         },
         "approvalStatus": { "type": "string", "enum": ["N/A", "Pending", "Approved", "Rejected"] },
@@ -275,6 +275,27 @@
         "time": { "type": "string", "description": "HH:mm:ss" }
       },
       "required": ["id", "inventoryCountId", "sku", "itemDescription", "originalValue", "newValue", "action", "reason", "requestedBy", "requestedById", "timestamp", "date", "time"]
+    },
+    "LocationVerification": {
+      "title": "LocationVerification",
+      "description": "Supervisor verification state for all inventory counts in a specific store location",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Deterministic store+location verification ID" },
+        "storeId": { "type": "string", "description": "Store identifier" },
+        "storeName": { "type": "string", "description": "Store name" },
+        "location": { "type": "string", "description": "Physical shelf/aisle/bin location" },
+        "status": { "type": "string", "enum": ["pending_verification", "verified", "recount_needed"], "description": "Verification status" },
+        "submittedById": { "type": "string", "description": "Counter UID who marked location done" },
+        "submittedByName": { "type": "string", "description": "Counter name" },
+        "submittedAt": { "type": "number", "description": "Submission timestamp" },
+        "itemCountSnapshot": { "type": "number", "description": "Count records snapshot" },
+        "totalUnitsSnapshot": { "type": "number", "description": "Total units snapshot" },
+        "verifiedById": { "type": "string", "description": "Supervisor UID" },
+        "verifiedByName": { "type": "string", "description": "Supervisor name" },
+        "supervisorNotes": { "type": "string", "description": "Verification or recount notes" }
+      },
+      "required": ["id", "storeId", "storeName", "location", "status", "submittedById", "submittedByName", "submittedAt"]
     }
   },
   "firestore": {
@@ -319,6 +340,12 @@
         "$ref": "#/entities/ManagedUser"
       },
       "description": "Admin provisioned user accounts with designated store assignments"
+    },
+    "/location_verifications/{verificationId}": {
+      "schema": {
+        "$ref": "#/entities/LocationVerification"
+      },
+      "description": "Per-location count verification records submitted by counters and checked by supervisors"
     }
   }
 }

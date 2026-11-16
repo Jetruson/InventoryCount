@@ -14,6 +14,7 @@ import {
   UserRole,
   CorrectionRequest,
   AuditLogEntry,
+  LocationVerification,
 } from './types/inventory';
 import {
   getLocalStores,
@@ -38,6 +39,7 @@ import {
   subscribeToCatalog,
   seedCatalogIfEmpty,
 } from './services/catalogService';
+import { subscribeToLocationVerifications } from './services/locationVerificationService';
 import { AuthScreen } from './components/AuthScreen';
 import { TopNav } from './components/TopNav';
 import { BottomNav, ActiveTab } from './components/BottomNav';
@@ -61,6 +63,7 @@ export default function App() {
   const [catalog, setCatalog] = useState<Product[]>([]);
   const [correctionRequests, setCorrectionRequests] = useState<CorrectionRequest[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [locationVerifications, setLocationVerifications] = useState<LocationVerification[]>([]);
   const [activeTab, setActiveTab] = useState<ActiveTab>('count');
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState<boolean>(false);
@@ -255,6 +258,13 @@ export default function App() {
           })
         : () => {};
 
+    const unsubLocationVerifications =
+      userRole !== 'admin'
+        ? subscribeToLocationVerifications((liveVerifications) => {
+            setLocationVerifications(liveVerifications);
+          })
+        : () => {};
+
     const unsubSync = subscribeToSyncStatus((status) => {
       setPendingSyncCount(status.pendingCount);
     });
@@ -264,9 +274,24 @@ export default function App() {
       unsubCatalog();
       unsubRequests();
       unsubAuditLogs();
+      unsubLocationVerifications();
       unsubSync();
     };
   }, [userId, userRole]);
+
+  const pendingLocationVerificationsCount = useMemo(() => {
+    if (!currentUser) return 0;
+    const role = currentUser.role;
+    if (role !== 'supervisor' && role !== 'ops_supervisor') return 0;
+    const assignedStoreId = currentUser.assignedStoreId || currentUser.activeStoreId;
+    return locationVerifications.filter((v) => {
+      if (v.status !== 'pending_verification') return false;
+      if (role === 'supervisor' && assignedStoreId && assignedStoreId !== 'ALL') {
+        return v.storeId === assignedStoreId;
+      }
+      return true;
+    }).length;
+  }, [locationVerifications, currentUser]);
 
   const pendingRequestsCount = useMemo(() => {
     if (!currentUser) return 0;
@@ -390,6 +415,8 @@ export default function App() {
             currentUser={currentUser}
             activeStore={activeStore}
             catalog={catalog}
+            counts={counts}
+            locationVerifications={locationVerifications}
             onCountSaved={handleCountSaved}
           />
         )}
@@ -400,6 +427,7 @@ export default function App() {
             activeStore={activeStore}
             currentUser={currentUser}
             correctionRequests={correctionRequests}
+            locationVerifications={locationVerifications}
           />
         )}
 
@@ -420,6 +448,7 @@ export default function App() {
               counts={counts}
               stores={stores}
               currentUser={currentUser}
+              locationVerifications={locationVerifications}
             />
           )}
 
@@ -483,6 +512,7 @@ export default function App() {
         onChangeTab={setActiveTab}
         pendingSyncCount={pendingSyncCount}
         pendingRequestsCount={pendingRequestsCount}
+        pendingVerificationsCount={pendingLocationVerificationsCount}
         currentUser={currentUser}
       />
 

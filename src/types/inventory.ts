@@ -88,7 +88,10 @@ export type AuditActionType =
   | 'ITEM_DETAILS_CHANGED'
   | 'RECORD_VOIDED'
   | 'VOID_REJECTED'
-  | 'COUNTS_PURGED';
+  | 'COUNTS_PURGED'
+  | 'LOCATION_DONE_SUBMITTED'
+  | 'LOCATION_VERIFIED'
+  | 'LOCATION_RECOUNT_FLAGGED';
 
 export interface AuditLogEntry {
   id: string;
@@ -175,4 +178,31 @@ export interface CountVarianceItem {
   status: 'matched' | 'over' | 'under' | 'uncounted';
   storesFound: string[];
   locationsFound: string[];
+}
+
+export type LocationVerificationStatus = 'pending_verification' | 'verified' | 'recount_needed';
+
+export interface LocationVerification {
+  id: string;
+  storeId: string;
+  storeName: string;
+  location: string;
+  status: LocationVerificationStatus;
+  submittedById: string;
+  submittedByName: string;
+  submittedByRole: UserRole;
+  submittedAt: number;
+  submittedDate: string;
+  submittedTime: string;
+  counterNotes?: string;
+  itemCountSnapshot: number;
+  totalUnitsSnapshot: number;
+  verifiedById?: string;
+  verifiedByName?: string;
+  verifiedByRole?: UserRole;
+  verifiedAt?: number;
+  verifiedDate?: string;
+  verifiedTime?: string;
+  supervisorNotes?: string;
+  doneCounting?: boolean;
 }

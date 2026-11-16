@@ -46,7 +46,7 @@ service cloud.firestore {
              data.itemDescription is string && data.itemDescription.size() <= 500 &&
              data.originalValue is string && data.originalValue.size() <= 1000 &&
              data.newValue is string && data.newValue.size() <= 1000 &&
-             data.action in ['COUNT_SUBMITTED', 'CORRECTION_REQUESTED', 'VOID_REQUESTED', 'CORRECTION_APPROVED', 'CORRECTION_REJECTED', 'QUANTITY_CHANGED', 'LOCATION_CHANGED', 'ITEM_DETAILS_CHANGED', 'RECORD_VOIDED', 'VOID_REJECTED', 'COUNTS_PURGED'] &&
+             data.action in ['COUNT_SUBMITTED', 'CORRECTION_REQUESTED', 'VOID_REQUESTED', 'CORRECTION_APPROVED', 'CORRECTION_REJECTED', 'QUANTITY_CHANGED', 'LOCATION_CHANGED', 'ITEM_DETAILS_CHANGED', 'RECORD_VOIDED', 'VOID_REJECTED', 'COUNTS_PURGED', 'LOCATION_DONE_SUBMITTED', 'LOCATION_VERIFIED', 'LOCATION_RECOUNT_FLAGGED'] &&
              data.reason is string && data.reason.size() <= 1000 &&
              data.requestedBy is string && data.requestedBy.size() > 0 && data.requestedBy.size() <= 150 &&
              data.requestedById is string && data.requestedById.size() > 0 && data.requestedById.size() <= 128 &&
@@ -71,6 +71,18 @@ service cloud.firestore {
              data.username is string && data.username.size() > 0 && data.username.size() <= 120 &&
              data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 150 &&
              data.role in ['counter', 'ops_counter', 'supervisor', 'ops_supervisor', 'audit', 'admin'];
+    }
+
+    function isValidLocationVerification(data) {
+      return data.keys().hasAll(['id', 'storeId', 'storeName', 'location', 'status', 'submittedById', 'submittedByName', 'submittedAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.storeId is string && data.storeId.size() > 0 && data.storeId.size() <= 64 &&
+             data.storeName is string && data.storeName.size() > 0 && data.storeName.size() <= 150 &&
+             data.location is string && data.location.size() > 0 && data.location.size() <= 150 &&
+             data.status in ['pending_verification', 'verified', 'recount_needed'] &&
+             data.submittedById is string && data.submittedById.size() > 0 && data.submittedById.size() <= 128 &&
+             data.submittedByName is string && data.submittedByName.size() > 0 && data.submittedByName.size() <= 150 &&
+             data.submittedAt is number;
     }
 
     // Connection health check
@@ -153,6 +165,27 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isValidId(userId) && isValidManagedUser(request.resource.data);
       allow delete: if isValidId(userId);
+    }
+
+    // Per-Location Count Verifications (Submitted by Counters, Verified/Flagged by Supervisors)
+    match /location_verifications/{verificationId} {
+      allow read: if true;
+      allow create, update: if isValidId(verificationId) &&
+                               isValidLocationVerification(request.resource.data) &&
+                               (
+                                 request.resource.data.status == 'pending_verification' ||
+                                 (
+                                   request.resource.data.verifiedById is string &&
+                                   request.resource.data.verifiedById.size() > 0 &&
+                                   request.resource.data.verifiedByRole in ['supervisor', 'ops_supervisor'] &&
+                                   request.resource.data.verifiedById != request.resource.data.submittedById &&
+                                   (
+                                     request.resource.data.status != 'recount_needed' ||
+                                     (request.resource.data.supervisorNotes is string && request.resource.data.supervisorNotes.size() > 0)
+                                   )
+                                 )
+                               );
+      allow delete: if false;
     }
   }
 }

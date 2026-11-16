@@ -8,6 +8,7 @@ interface BottomNavProps {
   onChangeTab: (tab: ActiveTab) => void;
   pendingSyncCount?: number;
   pendingRequestsCount?: number;
+  pendingVerificationsCount?: number;
   currentUser?: AppUser | null;
 }
 
@@ -23,6 +24,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   onChangeTab,
   pendingSyncCount = 0,
   pendingRequestsCount = 0,
+  pendingVerificationsCount = 0,
   currentUser,
 }) => {
   const role = currentUser?.role || 'counter';
@@ -54,7 +56,12 @@ export const BottomNav: React.FC<BottomNavProps> = ({
             icon: ClipboardCheck,
             badge: pendingRequestsCount > 0 ? pendingRequestsCount : null,
           },
-          { id: 'supervisor', label: 'Supervisor', icon: ShieldCheck },
+          {
+            id: 'supervisor',
+            label: 'Supervisor',
+            icon: ShieldCheck,
+            badge: pendingVerificationsCount > 0 ? pendingVerificationsCount : null,
+          },
           { id: 'catalog', label: 'Catalog', icon: Package },
         ]
       : [
