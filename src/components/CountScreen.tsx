@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Product, Store, InventoryCount, AppUser, ItemCondition, LocationVerification } from '../types/inventory';
-import { findProductByCode, getLocalCatalog } from '../services/catalogService';
+import { buildCatalogIndex, findProductByCodeInIndex, getLocalCatalog } from '../services/catalogService';
 import { recordCount } from '../services/offlineSyncService';
 import {
   getLocationVerificationId,
@@ -78,6 +78,9 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isScannerPaused, setIsScannerPaused] = useState<boolean>(false);
+
+  const catalogIndex = useMemo(() => buildCatalogIndex(catalog), [catalog]);
 
   const isSupervisorUser =
     currentUser.role === 'supervisor' || currentUser.role === 'ops_supervisor';
@@ -173,23 +176,37 @@ export const CountScreen: React.FC<CountScreenProps> = ({
   }, []);
 
   // Handle scanned or entered barcode
-  const handleBarcodeIdentified = (code: string) => {
-    const trimmed = code.trim();
-    if (!trimmed) return;
+  const handleBarcodeIdentified = useCallback(
+    (code: string, fromCamera = false) => {
+      const trimmed = code.trim();
+      if (!trimmed) return;
 
-    setBarcodeInput(trimmed);
-    const matched = findProductByCode(trimmed, catalog);
+      setBarcodeInput(trimmed);
+      const matched = findProductByCodeInIndex(trimmed, catalogIndex);
 
-    if (matched) {
-      setSelectedProduct(matched);
-      setValidationError(null);
-      playScanSuccessSound();
-    } else {
-      setSelectedProduct(null);
-      playScanErrorSound();
-      setValidationError(`Unrecognized barcode: "${trimmed}". Tap below to register as a new item.`);
-    }
-  };
+      if (matched) {
+        setSelectedProduct(matched);
+        setValidationError(null);
+        setIsScannerPaused(true);
+        playScanSuccessSound();
+      } else {
+        setSelectedProduct(null);
+        if (fromCamera) {
+          setIsScannerPaused(true);
+        }
+        playScanErrorSound();
+        setValidationError(`Unrecognized barcode: "${trimmed}". Tap below to register as a new item.`);
+      }
+    },
+    [catalogIndex]
+  );
+
+  const handleResumeScanner = useCallback(() => {
+    setIsScannerPaused(false);
+    setSelectedProduct(null);
+    setBarcodeInput('');
+    setValidationError(null);
+  }, []);
 
   const handleManualSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -295,6 +312,7 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       setSelectedProduct(null);
       setCountedQty('1');
       setRemarks('');
+      setIsScannerPaused(false);
     } catch (err: unknown) {
       setValidationError('Error saving count. Please verify network or try again.');
     } finally {
@@ -515,7 +533,10 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       {/* Mode Switcher: Camera Scanner vs Manual Keypad Entry */}
       <div className="grid grid-cols-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
         <button
-          onClick={() => setUseCamera(true)}
+          onClick={() => {
+            setUseCamera(true);
+            setIsScannerPaused(Boolean(selectedProduct));
+          }}
           className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-semibold transition active:scale-95 ${
             useCamera
               ? 'bg-emerald-600 text-white shadow-md'
@@ -526,7 +547,10 @@ export const CountScreen: React.FC<CountScreenProps> = ({
           <span>Camera Scanner</span>
         </button>
         <button
-          onClick={() => setUseCamera(false)}
+          onClick={() => {
+            setUseCamera(false);
+            setIsScannerPaused(false);
+          }}
           className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-semibold transition active:scale-95 ${
             !useCamera
               ? 'bg-emerald-600 text-white shadow-md'
@@ -574,8 +598,15 @@ export const CountScreen: React.FC<CountScreenProps> = ({
       {/* Scanner Section */}
       {useCamera ? (
         <BarcodeScanner
-          isScanningActive={useCamera}
-          onScan={(code) => handleBarcodeIdentified(code)}
+          isScanningActive={useCamera && !isLocationModalOpen && !isAddModalOpen && !isVerifyModalOpen}
+          isPaused={isScannerPaused}
+          pausedMessage={
+            selectedProduct
+              ? 'Item loaded — save count to scan next'
+              : 'Unrecognized barcode — register item or resume'
+          }
+          onResumeRequest={handleResumeScanner}
+          onScan={(code) => handleBarcodeIdentified(code, true)}
         />
       ) : (
         <form onSubmit={handleManualSearch} className="space-y-2">
@@ -646,8 +677,8 @@ export const CountScreen: React.FC<CountScreenProps> = ({
               </h2>
             </div>
             <button
-              onClick={() => setSelectedProduct(null)}
-              className="text-xs text-slate-400 hover:text-white underline shrink-0 ml-2"
+              onClick={handleResumeScanner}
+              className="text-xs text-slate-400 hover:text-white underline shrink-0 ml-2 min-h-[36px] px-1"
             >
               Change
             </button>

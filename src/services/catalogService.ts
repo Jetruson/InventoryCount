@@ -262,6 +262,50 @@ export async function addProductToCatalog(product: Omit<Product, 'id'>): Promise
   return newProduct;
 }
 
+export interface CatalogIndex {
+  byBarcode: Map<string, Product>;
+  bySku: Map<string, Product>;
+  products: Product[];
+}
+
+export function buildCatalogIndex(catalog: Product[]): CatalogIndex {
+  const byBarcode = new Map<string, Product>();
+  const bySku = new Map<string, Product>();
+
+  for (const product of catalog) {
+    const cleanBarcode = product.barcode?.trim().toLowerCase();
+    if (cleanBarcode && !byBarcode.has(cleanBarcode)) {
+      byBarcode.set(cleanBarcode, product);
+    }
+    const cleanSku = product.sku?.trim().toLowerCase();
+    if (cleanSku && !bySku.has(cleanSku)) {
+      bySku.set(cleanSku, product);
+    }
+  }
+
+  return { byBarcode, bySku, products: catalog };
+}
+
+export function findProductByCodeInIndex(code: string, index: CatalogIndex): Product | null {
+  if (!code) return null;
+  const cleanCode = code.trim().toLowerCase();
+  if (!cleanCode) return null;
+
+  const exactBarcode = index.byBarcode.get(cleanCode);
+  if (exactBarcode) return exactBarcode;
+
+  const exactSku = index.bySku.get(cleanCode);
+  if (exactSku) return exactSku;
+
+  // Partial match fallback for truncated or prefix-variant codes
+  const partial = index.products.find(
+    (p) =>
+      p.barcode.toLowerCase().includes(cleanCode) ||
+      p.sku.toLowerCase().includes(cleanCode)
+  );
+  return partial || null;
+}
+
 export function findProductByCode(code: string, catalog: Product[]): Product | null {
   if (!code) return null;
   const cleanCode = code.trim().toLowerCase();

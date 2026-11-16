@@ -27,12 +27,14 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
   const [mode, setMode] = useState<'manual' | 'scan'>('manual');
   const [scannedFeedback, setScannedFeedback] = useState<string | null>(null);
   const [blockedError, setBlockedError] = useState<string | null>(null);
+  const [isScanPaused, setIsScanPaused] = useState<boolean>(false);
 
   useEffect(() => {
     if (isOpen) {
       setManualInput(currentLocation);
       setScannedFeedback(null);
       setBlockedError(null);
+      setIsScanPaused(false);
     }
   }, [isOpen, currentLocation]);
 
@@ -78,6 +80,7 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
   const handleLocationBarcodeScanned = (decoded: string) => {
     const trimmed = decoded.trim();
     if (trimmed) {
+      setIsScanPaused(true);
       setScannedFeedback(trimmed);
       setManualInput(trimmed);
       const alreadyDone = findDoneVerification(trimmed);
@@ -92,7 +95,7 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
       setBlockedError(null);
       setTimeout(() => {
         handleSave(trimmed);
-      }, 500);
+      }, 400);
     }
   };
 
@@ -112,7 +115,8 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            aria-label="Close modal"
           >
             <X className="w-5 h-5" />
           </button>
@@ -123,7 +127,10 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
           <div className="grid grid-cols-2 p-1 bg-slate-900 rounded-xl border border-slate-800 text-xs font-semibold">
             <button
               type="button"
-              onClick={() => setMode('manual')}
+              onClick={() => {
+                setMode('manual');
+                setIsScanPaused(false);
+              }}
               className={`py-2 rounded-lg transition ${
                 mode === 'manual' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
               }`}
@@ -132,7 +139,12 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setMode('scan')}
+              onClick={() => {
+                setMode('scan');
+                setBlockedError(null);
+                setScannedFeedback(null);
+                setIsScanPaused(false);
+              }}
               className={`py-2 rounded-lg transition ${
                 mode === 'scan' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
               }`}
@@ -170,6 +182,19 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
               </div>
               <BarcodeScanner
                 isScanningActive={isOpen && mode === 'scan'}
+                isPaused={isScanPaused}
+                pausedMessage={
+                  blockedError
+                    ? 'Location tagged Done Counting — scan another shelf'
+                    : scannedFeedback
+                    ? `Selected "${scannedFeedback}"`
+                    : undefined
+                }
+                onResumeRequest={() => {
+                  setBlockedError(null);
+                  setScannedFeedback(null);
+                  setIsScanPaused(false);
+                }}
                 onScan={handleLocationBarcodeScanned}
               />
               {scannedFeedback && !blockedError && (
