@@ -265,25 +265,45 @@ export async function addProductToCatalog(product: Omit<Product, 'id'>): Promise
 export interface CatalogIndex {
   byBarcode: Map<string, Product>;
   bySku: Map<string, Product>;
+  byUnpaddedCode: Map<string, Product>;
   products: Product[];
+}
+
+function stripLeadingZerosIfNumeric(value: string): string | null {
+  if (!/^\d+$/.test(value)) return null;
+  return value.replace(/^0+/, '') || '0';
 }
 
 export function buildCatalogIndex(catalog: Product[]): CatalogIndex {
   const byBarcode = new Map<string, Product>();
   const bySku = new Map<string, Product>();
+  const byUnpaddedCode = new Map<string, Product>();
 
   for (const product of catalog) {
     const cleanBarcode = product.barcode?.trim().toLowerCase();
-    if (cleanBarcode && !byBarcode.has(cleanBarcode)) {
-      byBarcode.set(cleanBarcode, product);
+    if (cleanBarcode) {
+      if (!byBarcode.has(cleanBarcode)) {
+        byBarcode.set(cleanBarcode, product);
+      }
+      const unpaddedBarcode = stripLeadingZerosIfNumeric(cleanBarcode);
+      if (unpaddedBarcode && !byUnpaddedCode.has(unpaddedBarcode)) {
+        byUnpaddedCode.set(unpaddedBarcode, product);
+      }
     }
+
     const cleanSku = product.sku?.trim().toLowerCase();
-    if (cleanSku && !bySku.has(cleanSku)) {
-      bySku.set(cleanSku, product);
+    if (cleanSku) {
+      if (!bySku.has(cleanSku)) {
+        bySku.set(cleanSku, product);
+      }
+      const unpaddedSku = stripLeadingZerosIfNumeric(cleanSku);
+      if (unpaddedSku && !byUnpaddedCode.has(unpaddedSku)) {
+        byUnpaddedCode.set(unpaddedSku, product);
+      }
     }
   }
 
-  return { byBarcode, bySku, products: catalog };
+  return { byBarcode, bySku, byUnpaddedCode, products: catalog };
 }
 
 export function findProductByCodeInIndex(code: string, index: CatalogIndex): Product | null {
@@ -296,6 +316,12 @@ export function findProductByCodeInIndex(code: string, index: CatalogIndex): Pro
 
   const exactSku = index.bySku.get(cleanCode);
   if (exactSku) return exactSku;
+
+  const unpaddedCode = stripLeadingZerosIfNumeric(cleanCode);
+  if (unpaddedCode) {
+    const byUnpadded = index.byUnpaddedCode.get(unpaddedCode);
+    if (byUnpadded) return byUnpadded;
+  }
 
   // Partial match fallback for truncated or prefix-variant codes
   const partial = index.products.find(

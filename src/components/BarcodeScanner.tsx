@@ -14,12 +14,15 @@ interface BarcodeScannerProps {
   onResumeRequest?: () => void;
 }
 
-const RETAIL_AND_QR_FORMATS: Html5QrcodeSupportedFormats[] = [
+const SUPPORTED_BARCODE_FORMATS: Html5QrcodeSupportedFormats[] = [
   Html5QrcodeSupportedFormats.EAN_13,
   Html5QrcodeSupportedFormats.EAN_8,
   Html5QrcodeSupportedFormats.UPC_A,
   Html5QrcodeSupportedFormats.UPC_E,
   Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.CODE_93,
+  Html5QrcodeSupportedFormats.ITF,
   Html5QrcodeSupportedFormats.QR_CODE,
 ];
 
@@ -64,7 +67,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
     if (!container) return;
 
     const html5QrCode = new Html5Qrcode(readerElementId, {
-      formatsToSupport: RETAIL_AND_QR_FORMATS,
+      formatsToSupport: SUPPORTED_BARCODE_FORMATS,
       useBarCodeDetectorIfSupported: true,
       experimentalFeatures: {
         useBarCodeDetectorIfSupported: true,
@@ -132,8 +135,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
             disableFlip: true,
             aspectRatio: 1.333,
             qrbox: (viewfinderWidth: number, viewfinderHeight: number) => ({
-              width: Math.max(160, Math.min(280, Math.floor(viewfinderWidth * 0.84))),
-              height: Math.max(110, Math.min(165, Math.floor(viewfinderHeight * 0.62))),
+              width: Math.min(viewfinderWidth - 8, Math.max(160, Math.min(340, Math.floor(viewfinderWidth * 0.9)))),
+              height: Math.min(viewfinderHeight - 8, Math.max(110, Math.min(220, Math.floor(viewfinderHeight * 0.76)))),
             }),
             videoConstraints: {
               facingMode: 'environment',
@@ -294,7 +297,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         {/* Active Scanning Framing Guides Overlay */}
         {scannerStarted && !isPaused && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="relative w-[260px] max-w-[84%] h-[150px] rounded-xl border-2 border-emerald-400/80 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)]">
+            <div className="relative w-[90%] max-w-[340px] h-[74%] max-h-[215px] rounded-xl border-2 border-emerald-400/80 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)]">
               <span className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-emerald-400 rounded-tl-sm" />
               <span className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-emerald-400 rounded-tr-sm" />
               <span className="absolute -bottom-1 -left-1 w-4 h-4 border-b-3 border-l-3 border-emerald-400 rounded-bl-sm" />
@@ -305,7 +308,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
 
               <div className="absolute -bottom-7 left-0 right-0 text-center">
                 <span className="rounded-md bg-slate-900/90 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
-                  Align Barcode Inside Box
+                  Align One Barcode Horizontally Inside Box
                 </span>
               </div>
             </div>
