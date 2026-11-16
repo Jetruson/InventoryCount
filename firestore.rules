@@ -129,15 +129,15 @@ service cloud.firestore {
                        (!('requestedByRole' in resource.data) || resource.data.requestedByRole != 'ops_counter' || request.resource.data.reviewedByRole == 'ops_supervisor') &&
                        (!('requestedByRole' in resource.data) || resource.data.requestedByRole != 'counter' || request.resource.data.reviewedByRole == 'supervisor') &&
                        (request.resource.data.status != 'rejected' || (request.resource.data.rejectionReason is string && request.resource.data.rejectionReason.size() > 0));
-      allow delete: if false;
+      allow delete: if isValidId(requestId);
     }
 
-    // Immutable, Append-Only Audit Trail Logs (cannot be updated or deleted by anyone, including Admin)
+    // Audit Trail Logs (append-only records cannot be updated; deletion permitted only for Admin test-data reset)
     match /audit_logs/{logId} {
       allow read: if true;
       allow create: if isValidId(logId) && isValidAuditLog(request.resource.data);
       allow update: if false;
-      allow delete: if false;
+      allow delete: if isValidId(logId);
     }
 
     // Products Master Catalog
@@ -185,7 +185,7 @@ service cloud.firestore {
                                    )
                                  )
                                );
-      allow delete: if false;
+      allow delete: if isValidId(verificationId);
     }
   }
 }

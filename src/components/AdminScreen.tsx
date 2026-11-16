@@ -11,6 +11,7 @@ import {
   verifyAdminPassword,
 } from '../services/userService';
 import { deleteCountsByStore, deleteAllCounts } from '../services/offlineSyncService';
+import { resetAuditTrail } from '../services/auditService';
 import * as XLSX from 'xlsx';
 import {
   ShieldAlert,
@@ -106,12 +107,13 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
 
   // Admin Delete Counts (By Store / All) with Password Confirmation
   const [deleteTargetStoreId, setDeleteTargetStoreId] = useState<string>(stores[0]?.storeId || '');
-  const [purgeModalMode, setPurgeModalMode] = useState<'store' | 'all' | null>(null);
+  const [purgeModalMode, setPurgeModalMode] = useState<'store' | 'all' | 'audit_trail' | null>(null);
   const [purgePassword, setPurgePassword] = useState<string>('');
   const [showPurgePassword, setShowPurgePassword] = useState<boolean>(false);
   const [purgeError, setPurgeError] = useState<string | null>(null);
   const [purgeSuccess, setPurgeSuccess] = useState<string | null>(null);
   const [isPurging, setIsPurging] = useState<boolean>(false);
+  const [clearRelatedAuditData, setClearRelatedAuditData] = useState<boolean>(true);
 
   // User Management state (Admin only)
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>(getLocalManagedUsers());
@@ -161,7 +163,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     ).length;
   }, [counts, targetStoreObj]);
 
-  const openPurgeModal = (mode: 'store' | 'all') => {
+  const openPurgeModal = (mode: 'store' | 'all' | 'audit_trail') => {
     setPurgeError(null);
     setPurgePassword('');
     setShowPurgePassword(false);
@@ -183,7 +185,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     try {
       const verified = await verifyAdminPassword(currentUser, purgePassword, managedUsers);
       if (!verified) {
-        setPurgeError('Incorrect administrator password. Deletion was cancelled.');
+        setPurgeError('Incorrect administrator password. Action was cancelled.');
         setIsPurging(false);
         return;
       }
@@ -198,17 +200,28 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         setPurgeSuccess(
           `Deleted ${deletedCount} count record(s) for ${targetStoreObj.name} (${targetStoreObj.storeId}). Action logged in Audit Trail.`
         );
-      } else {
+      } else if (purgeModalMode === 'all') {
         const { deletedCount } = await deleteAllCounts(currentUser);
         setPurgeSuccess(
           `Deleted all ${deletedCount} count record(s) across all stores. Action logged in Audit Trail.`
         );
+      } else {
+        const { deletedLogs, deletedRequests, deletedVerifications } = await resetAuditTrail(
+          currentUser,
+          { clearRequestsAndVerifications: clearRelatedAuditData }
+        );
+        const parts = [`${deletedLogs} audit log(s)`];
+        if (clearRelatedAuditData) {
+          parts.push(`${deletedRequests} correction/void request(s)`);
+          parts.push(`${deletedVerifications} location verification(s)`);
+        }
+        setPurgeSuccess(`Audit Trail reset complete: cleared ${parts.join(', ')}.`);
       }
 
       setPurgeModalMode(null);
       setPurgePassword('');
     } catch (err: any) {
-      setPurgeError(err?.message || 'Failed to delete inventory counts. Check connection.');
+      setPurgeError(err?.message || 'Failed to clear selected records. Check connection.');
     } finally {
       setIsPurging(false);
     }
@@ -1697,6 +1710,42 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Reset Audit Trail (Test Data Cleanup) */}
+            <div className="rounded-xl bg-amber-950/15 border border-amber-500/30 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-amber-200 flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                    Reset Audit Trail (Test Data Cleanup)
+                  </span>
+                  <span className="rounded-md bg-amber-500/20 text-amber-300 px-1.5 py-0.5 text-[10px] font-black uppercase">
+                    Pre-Live Reset
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Permanently clears all test Audit Trail logs from Firestore so you can start a clean live count cycle.
+                </p>
+                <label className="inline-flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer select-none pt-0.5">
+                  <input
+                    type="checkbox"
+                    checked={clearRelatedAuditData}
+                    onChange={(e) => setClearRelatedAuditData(e.target.checked)}
+                    className="rounded border-slate-600 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                  />
+                  <span>Also clear test Correction/Void Requests &amp; Done-Location verification tags</span>
+                </label>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => openPurgeModal('audit_trail')}
+                className="shrink-0 h-10 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-xs font-bold text-white shadow-md transition flex items-center justify-center gap-1.5 active:scale-95"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Reset Audit Trail</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2642,7 +2691,9 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                 <h3 className="text-sm font-bold text-white">
                   {purgeModalMode === 'store'
                     ? `Delete Counts for ${targetStoreObj?.name}`
-                    : 'Delete All Inventory Counts'}
+                    : purgeModalMode === 'all'
+                    ? 'Delete All Inventory Counts'
+                    : 'Reset Audit Trail (Test Data)'}
                 </h3>
               </div>
               <button
@@ -2658,10 +2709,16 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
               <p className="font-bold text-rose-300">
                 {purgeModalMode === 'store'
                   ? `You are about to permanently delete ${targetStoreCountRecords} count record(s) from ${targetStoreObj?.name} (${targetStoreObj?.storeId}).`
-                  : `You are about to permanently delete ALL ${counts.length} count record(s) across ALL stores.`}
+                  : purgeModalMode === 'all'
+                  ? `You are about to permanently delete ALL ${counts.length} count record(s) across ALL stores.`
+                  : clearRelatedAuditData
+                  ? 'You are about to permanently clear ALL Audit Trail logs, Correction/Void Requests, and Done-Location verifications.'
+                  : 'You are about to permanently clear ALL Audit Trail logs across the entire system.'}
               </p>
               <p className="text-[11px] text-rose-200/80">
-                This action cannot be undone. An immutable audit entry will still record this deletion in the Audit Trail.
+                {purgeModalMode === 'audit_trail'
+                  ? 'This action cannot be undone and is intended for wiping test data before starting live counts.'
+                  : 'This action cannot be undone. An immutable audit entry will still record this deletion in the Audit Trail.'}
               </p>
             </div>
 
@@ -2716,7 +2773,15 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white shadow-md active:scale-95 transition disabled:opacity-50 flex items-center gap-1.5"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>{isPurging ? 'Deleting Counts...' : 'Confirm & Delete'}</span>
+                  <span>
+                    {isPurging
+                      ? purgeModalMode === 'audit_trail'
+                        ? 'Resetting Audit Trail...'
+                        : 'Deleting Counts...'
+                      : purgeModalMode === 'audit_trail'
+                      ? 'Confirm & Reset'
+                      : 'Confirm & Delete'}
+                  </span>
                 </button>
               </div>
             </form>

@@ -19,6 +19,7 @@ import {
   limit,
   where,
   runTransaction,
+  writeBatch,
 } from 'firebase/firestore';
 
 const LOCAL_REQUESTS_KEY = 'inventory_correction_requests_cache';
@@ -876,4 +877,74 @@ export async function rejectCorrectionOrVoidRequest(
   if (rejectAudit) {
     saveLocalAuditLogs([rejectAudit, ...getLocalAuditLogs()]);
   }
+}
+
+/**
+ * Admin-only: Resets test audit trail logs (and optionally test correction requests & location verifications).
+ */
+export async function resetAuditTrail(
+  adminUser: AppUser,
+  options: { clearRequestsAndVerifications?: boolean } = {}
+): Promise<{
+  deletedLogs: number;
+  deletedRequests: number;
+  deletedVerifications: number;
+}> {
+  if (adminUser.role !== 'admin') {
+    throw new Error('Only System Administrators can reset the audit trail.');
+  }
+
+  const clearRelated = options.clearRequestsAndVerifications !== false;
+
+  const deleteCollectionInBatches = async (collectionName: string): Promise<number> => {
+    try {
+      const snapshot = await getDocs(collection(db, collectionName));
+      const docs = snapshot.docs;
+      let deleted = 0;
+      for (let i = 0; i < docs.length; i += 450) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + 450).forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+        deleted += Math.min(450, docs.length - i);
+      }
+      return deleted;
+    } catch (err: any) {
+      if (err?.code === 'permission-denied') {
+        handleFirestoreError(err, OperationType.DELETE, collectionName);
+      }
+      throw err;
+    }
+  };
+
+  const localLogsCount = getLocalAuditLogs().length;
+  const firestoreLogsDeleted = await deleteCollectionInBatches('audit_logs');
+  saveLocalAuditLogs([]);
+
+  let deletedRequests = 0;
+  let deletedVerifications = 0;
+
+  if (clearRelated) {
+    const localReqsCount = getLocalCorrectionRequests().length;
+    const firestoreReqsDeleted = await deleteCollectionInBatches('correction_requests');
+    saveLocalCorrectionRequests([]);
+    deletedRequests = Math.max(firestoreReqsDeleted, localReqsCount);
+
+    let localVerifsCount = 0;
+    try {
+      const raw = localStorage.getItem('inventory_location_verifications_cache');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) localVerifsCount = parsed.length;
+      }
+      localStorage.setItem('inventory_location_verifications_cache', JSON.stringify([]));
+    } catch {}
+    const firestoreVerifsDeleted = await deleteCollectionInBatches('location_verifications');
+    deletedVerifications = Math.max(firestoreVerifsDeleted, localVerifsCount);
+  }
+
+  return {
+    deletedLogs: Math.max(firestoreLogsDeleted, localLogsCount),
+    deletedRequests,
+    deletedVerifications,
+  };
 }
