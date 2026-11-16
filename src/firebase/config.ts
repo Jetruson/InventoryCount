@@ -1,5 +1,11 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import {
+  initializeAuth,
+  getAuth,
+  browserSessionPersistence,
+  setPersistence,
+  Auth,
+} from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -7,7 +13,19 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0
 
 // Export Firestore with specific database ID from config
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+
+// Use session-scoped auth persistence: stays logged in when minimized/backgrounded,
+// returns to login when the browser tab or standalone app is closed.
+let authInstance: Auth;
+try {
+  authInstance = initializeAuth(app, {
+    persistence: browserSessionPersistence,
+  });
+} catch {
+  authInstance = getAuth(app);
+  void setPersistence(authInstance, browserSessionPersistence);
+}
+export const auth = authInstance;
 
 export enum OperationType {
   CREATE = 'create',

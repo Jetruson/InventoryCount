@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { auth } from '../firebase/config';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import {
+  browserSessionPersistence,
+  setPersistence,
+  signInWithEmailAndPassword,
+} from 'firebase/auth';
 import { Store, AppUser, ManagedUser, UserRole } from '../types/inventory';
 import { DEFAULT_STORES, setStoredActiveStore } from '../services/storeService';
 import {
@@ -87,7 +91,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
           assignedStoreName: matchedManaged.assignedStoreName,
         };
 
-        localStorage.setItem('inventory_count_session_user', JSON.stringify(sessionUser));
+        try {
+          localStorage.removeItem('inventory_count_session_user');
+        } catch {}
+        sessionStorage.setItem('inventory_count_session_user', JSON.stringify(sessionUser));
         setStoredActiveStore(designatedStore);
         onLoginSuccess(sessionUser, designatedStore);
         return;
@@ -109,6 +116,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
       // 2. Fallback to Firebase Auth with email if configured
       if (inputId.includes('@')) {
         try {
+          await setPersistence(auth, browserSessionPersistence);
           const cred = await signInWithEmailAndPassword(auth, inputId, inputPass);
           const isUserAdmin =
             inputId.toLowerCase() === 'jetgonzalgo@gmail.com' ||
@@ -132,7 +140,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ stores, onLoginSuccess }
             assignedStoreName: designatedStore.name,
           };
 
-          localStorage.setItem('inventory_count_session_user', JSON.stringify(sessionUser));
+          try {
+            localStorage.removeItem('inventory_count_session_user');
+          } catch {}
+          sessionStorage.setItem('inventory_count_session_user', JSON.stringify(sessionUser));
           setStoredActiveStore(designatedStore);
           onLoginSuccess(sessionUser, designatedStore);
           return;

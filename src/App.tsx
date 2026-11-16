@@ -77,8 +77,14 @@ export default function App() {
     return () => unsubStores();
   }, []);
 
-  // Monitor Firebase Auth state or stored local session
+  // Monitor Firebase Auth state or stored session-scoped user (survives minimize, clears on app close)
   useEffect(() => {
+    try {
+      localStorage.removeItem('inventory_count_session_user');
+    } catch {
+      // ignore storage errors
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
         const storedStore = getStoredActiveStore();
@@ -92,13 +98,13 @@ export default function App() {
           ? 'supervisor'
           : 'counter';
 
-        // Check local session storage for assignment metadata
+        // Check sessionStorage for assignment metadata
         let assignedStoreId: string | undefined = undefined;
         let assignedStoreName: string | undefined = undefined;
         try {
-          const localSession = localStorage.getItem('inventory_count_session_user');
-          if (localSession) {
-            const parsed = JSON.parse(localSession);
+          const activeSession = sessionStorage.getItem('inventory_count_session_user');
+          if (activeSession) {
+            const parsed = JSON.parse(activeSession);
             if (parsed.uid === firebaseUser.uid || parsed.email === firebaseUser.email) {
               assignedStoreId = parsed.assignedStoreId;
               assignedStoreName = parsed.assignedStoreName;
@@ -138,11 +144,11 @@ export default function App() {
           }
         }
       } else {
-        // Check if there is an active credential-provisioned local session
+        // Check if there is an active credential-provisioned session (preserved while minimized, cleared when app closes)
         try {
-          const localSession = localStorage.getItem('inventory_count_session_user');
-          if (localSession) {
-            const parsed: AppUser = JSON.parse(localSession);
+          const activeSession = sessionStorage.getItem('inventory_count_session_user');
+          if (activeSession) {
+            const parsed: AppUser = JSON.parse(activeSession);
             setCurrentUser(parsed);
             if (
               (parsed.role === 'counter' || parsed.role === 'supervisor') &&
@@ -343,6 +349,7 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
+      sessionStorage.removeItem('inventory_count_session_user');
       localStorage.removeItem('inventory_count_session_user');
       await signOut(auth);
       setCurrentUser(null);
