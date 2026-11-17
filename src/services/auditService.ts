@@ -8,6 +8,7 @@ import {
   AppUser,
 } from '../types/inventory';
 import { db, handleFirestoreError, OperationType } from '../firebase/config';
+import { DEFAULT_ANNUAL_SESSION_ID, normalizeCountType } from './sessionService';
 import {
   collection,
   doc,
@@ -135,6 +136,9 @@ function parseCorrectionRequestDoc(id: string, d: Record<string, any>): Correcti
     reviewedTime: d.reviewedTime,
     rejectionReason: d.rejectionReason,
     syncStatus: 'synced',
+    countType: normalizeCountType(d.countType),
+    sessionId: d.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+    cutoffDate: d.cutoffDate || undefined,
   };
 }
 
@@ -161,6 +165,9 @@ function parseAuditLogDoc(id: string, d: Record<string, any>): AuditLogEntry {
     timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
     date: d.date || '',
     time: d.time || '',
+    countType: normalizeCountType(d.countType),
+    sessionId: d.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+    cutoffDate: d.cutoffDate || undefined,
   };
 }
 
@@ -292,6 +299,9 @@ export async function recordCountSubmittedAuditLog(count: InventoryCount): Promi
     reason: 'Initial physical inventory count submission',
     requestedBy: count.username,
     requestedById: count.userId,
+    countType: normalizeCountType(count.countType),
+    sessionId: count.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+    cutoffDate: count.cutoffDate,
   });
 }
 
@@ -430,6 +440,9 @@ export async function submitCorrectionOrVoidRequest(
     requestedDate: sys.date,
     requestedTime: sys.time,
     syncStatus: 'synced',
+    countType: normalizeCountType(count.countType),
+    sessionId: count.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+    cutoffDate: count.cutoffDate,
   };
 
   try {
@@ -463,6 +476,9 @@ export async function submitCorrectionOrVoidRequest(
     reason: trimmedReason,
     requestedBy: requestObj.requestedByUsername,
     requestedById: requestObj.requestedById,
+    countType: requestObj.countType,
+    sessionId: requestObj.sessionId,
+    cutoffDate: requestObj.cutoffDate,
   });
 
   return requestObj;
@@ -626,6 +642,9 @@ export async function approveCorrectionOrVoidRequest(
           requestedById: request.requestedById,
           reviewedBy: reviewerName,
           reviewedById: reviewer.uid,
+          countType: normalizeCountType(request.countType),
+          sessionId: request.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+          cutoffDate: request.cutoffDate,
         });
         tx.set(doc(db, 'audit_logs', voidAudit.id), stripUndefined(voidAudit));
         generatedAuditLogs.push(voidAudit);
@@ -664,6 +683,9 @@ export async function approveCorrectionOrVoidRequest(
           requestedById: request.requestedById,
           reviewedBy: reviewerName,
           reviewedById: reviewer.uid,
+          countType: normalizeCountType(request.countType),
+          sessionId: request.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+          cutoffDate: request.cutoffDate,
         });
         tx.set(doc(db, 'audit_logs', approvalAudit.id), stripUndefined(approvalAudit));
         generatedAuditLogs.push(approvalAudit);
@@ -690,6 +712,9 @@ export async function approveCorrectionOrVoidRequest(
             requestedById: request.requestedById,
             reviewedBy: reviewerName,
             reviewedById: reviewer.uid,
+            countType: normalizeCountType(request.countType),
+            sessionId: request.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+            cutoffDate: request.cutoffDate,
           });
           tx.set(doc(db, 'audit_logs', qtyAudit.id), stripUndefined(qtyAudit));
           generatedAuditLogs.push(qtyAudit);
@@ -715,6 +740,9 @@ export async function approveCorrectionOrVoidRequest(
             requestedById: request.requestedById,
             reviewedBy: reviewerName,
             reviewedById: reviewer.uid,
+            countType: normalizeCountType(request.countType),
+            sessionId: request.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+            cutoffDate: request.cutoffDate,
           });
           tx.set(doc(db, 'audit_logs', locAudit.id), stripUndefined(locAudit));
           generatedAuditLogs.push(locAudit);
@@ -744,6 +772,9 @@ export async function approveCorrectionOrVoidRequest(
             requestedById: request.requestedById,
             reviewedBy: reviewerName,
             reviewedById: reviewer.uid,
+            countType: normalizeCountType(request.countType),
+            sessionId: request.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+            cutoffDate: request.cutoffDate,
           });
           tx.set(doc(db, 'audit_logs', itemAudit.id), stripUndefined(itemAudit));
           generatedAuditLogs.push(itemAudit);
@@ -847,6 +878,9 @@ export async function rejectCorrectionOrVoidRequest(
         requestedById: request.requestedById,
         reviewedBy: reviewerName,
         reviewedById: reviewer.uid,
+        countType: normalizeCountType(request.countType),
+        sessionId: request.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+        cutoffDate: request.cutoffDate,
       });
       tx.set(doc(db, 'audit_logs', rejectAudit.id), stripUndefined(rejectAudit));
     });
@@ -940,6 +974,13 @@ export async function resetAuditTrail(
     } catch {}
     const firestoreVerifsDeleted = await deleteCollectionInBatches('location_verifications');
     deletedVerifications = Math.max(firestoreVerifsDeleted, localVerifsCount);
+
+    try {
+      localStorage.setItem('inventory_location_recounts_cache', JSON.stringify([]));
+      localStorage.setItem('inventory_count_finalizations_cache', JSON.stringify([]));
+    } catch {}
+    await deleteCollectionInBatches('location_recounts');
+    await deleteCollectionInBatches('count_finalizations');
   }
 
   return {

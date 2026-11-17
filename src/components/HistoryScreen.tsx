@@ -6,8 +6,10 @@ import {
   CorrectionRequest,
   CorrectionRequestType,
   LocationVerification,
+  CountingSession,
 } from '../types/inventory';
 import { getLocationVerificationId } from '../services/locationVerificationService';
+import { getCountTypeLabel } from '../services/sessionService';
 import { CorrectionRequestModal } from './CorrectionRequestModal';
 import * as XLSX from 'xlsx';
 import {
@@ -25,12 +27,14 @@ import {
   Ban,
   AlertTriangle,
   History,
+  Lock,
 } from 'lucide-react';
 
 interface HistoryScreenProps {
   counts: InventoryCount[];
   activeStore: Store;
   currentUser?: AppUser;
+  activeSession?: CountingSession | null;
   correctionRequests?: CorrectionRequest[];
   locationVerifications?: LocationVerification[];
 }
@@ -39,9 +43,11 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
   counts,
   activeStore,
   currentUser,
+  activeSession,
   correctionRequests = [],
   locationVerifications = [],
 }) => {
+  const isSessionClosed = activeSession?.status === 'closed';
   const role = currentUser?.role || 'counter';
   const isCounterRole = role === 'counter' || role === 'ops_counter';
   const isAuditRole = role === 'audit';
@@ -162,6 +168,10 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
       const rows = filteredCounts.map((c, idx) => ({
         '#': idx + 1,
         'Count ID': c.id,
+        'Count Mode': getCountTypeLabel(c.countType || activeSession?.countType),
+        'Session': activeSession?.title || c.sessionId || 'Annual Inventory Count',
+        'Cut-Off Date': c.cutoffDate || activeSession?.cutoffDate || '',
+        Round: (c.countRound ?? 1) === 2 ? '2nd Count' : '1st Count',
         Status: c.status === 'voided' ? 'VOIDED' : 'ACTIVE',
         Version: c.version || 1,
         Date: c.date,
@@ -188,6 +198,10 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
       ws['!cols'] = [
         { wch: 6 },
         { wch: 22 },
+        { wch: 22 },
+        { wch: 26 },
+        { wch: 13 },
+        { wch: 11 },
         { wch: 10 },
         { wch: 9 },
         { wch: 12 },
@@ -211,7 +225,8 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
       XLSX.utils.book_append_sheet(wb, ws, 'Audit Counts');
 
       const dateTag = new Date().toISOString().split('T')[0];
-      const filename = `Audit_Count_Extract_${dateTag}.xlsx`;
+      const modePrefix = activeSession?.countType === 'cycle' ? 'Cycle_Count' : 'Annual_Count';
+      const filename = `${modePrefix}_History_${dateTag}.xlsx`;
       XLSX.writeFile(wb, filename);
       setExtractNotice(`Extracted ${filteredCounts.length} records to ${filename}`);
     } catch (err) {
@@ -224,6 +239,10 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
     try {
       const rows = filteredCounts.map((c) => ({
         CountID: c.id,
+        CountMode: getCountTypeLabel(c.countType || activeSession?.countType),
+        Session: activeSession?.title || c.sessionId || 'Annual Inventory Count',
+        CutoffDate: c.cutoffDate || activeSession?.cutoffDate || '',
+        Round: (c.countRound ?? 1) === 2 ? '2nd Count' : '1st Count',
         Status: c.status === 'voided' ? 'VOIDED' : 'ACTIVE',
         Version: c.version || 1,
         Date: c.date,
@@ -248,7 +267,8 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
       XLSX.utils.book_append_sheet(wb, ws, 'Counts');
 
       const dateTag = new Date().toISOString().split('T')[0];
-      const filename = `Audit_Count_Extract_${dateTag}.csv`;
+      const modePrefix = activeSession?.countType === 'cycle' ? 'Cycle_Count' : 'Annual_Count';
+      const filename = `${modePrefix}_History_${dateTag}.csv`;
       XLSX.writeFile(wb, filename, { bookType: 'csv' });
       setExtractNotice(`Extracted ${filteredCounts.length} records to ${filename}`);
     } catch (err) {
@@ -258,6 +278,33 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
 
   return (
     <div className="w-full max-w-2xl mx-auto pb-24 pt-2 px-3.5 space-y-4">
+      {/* Active Session Banner */}
+      {activeSession && (
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <span
+              className={`font-bold ${
+                activeSession.countType === 'cycle' ? 'text-cyan-300' : 'text-emerald-300'
+              }`}
+            >
+              {getCountTypeLabel(activeSession.countType)}
+            </span>
+            <span className="text-slate-600" aria-hidden="true">·</span>
+            <span className="font-semibold text-white truncate">{activeSession.title}</span>
+            <span className="text-slate-600" aria-hidden="true">·</span>
+            <span className="font-mono tabular-nums text-slate-300">
+              Cut-Off {activeSession.cutoffDate || '—'}
+            </span>
+          </div>
+          {isSessionClosed && (
+            <span className="inline-flex items-center gap-1 font-semibold text-amber-300 shrink-0">
+              <Lock className="w-3.5 h-3.5" />
+              Closed · Read-Only
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Header Summary Strip */}
       <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-md flex items-center justify-between">
         <div>
@@ -443,7 +490,12 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
             const pendingReq = reqMeta?.pending;
             const latestReq = reqMeta?.latest;
             const canRequestChanges =
-              !!currentUser && !isAuditRole && role !== 'admin' && !isVoided && !pendingReq;
+              !isSessionClosed &&
+              !!currentUser &&
+              !isAuditRole &&
+              role !== 'admin' &&
+              !isVoided &&
+              !pendingReq;
 
             return (
               <div
@@ -460,6 +512,11 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
                       <span className="rounded-md bg-slate-800 border border-slate-700 px-2 py-0.5 font-mono text-xs font-bold text-emerald-400">
                         {item.sku}
                       </span>
+                      {(item.countRound ?? 1) === 2 && (
+                        <span className="text-[11px] font-bold text-amber-300">
+                          · 2nd Count
+                        </span>
+                      )}
                       {isVoided && (
                         <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 border border-rose-500/40 px-1.5 py-0.5 text-[10px] font-black uppercase text-rose-300">
                           <Ban className="w-2.5 h-2.5" />
@@ -490,7 +547,8 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({
                           {(() => {
                             const verId = getLocationVerificationId(
                               item.storeId || activeStore.storeId,
-                              item.location
+                              item.location,
+                              activeSession?.id
                             );
                             const locVer = locationVerifications.find(
                               (v) =>

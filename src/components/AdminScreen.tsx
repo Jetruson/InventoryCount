@@ -1,5 +1,32 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { InventoryCount, Store, Product, MasterlistItem, CountVarianceItem, AppUser, ManagedUser, UserRole } from '../types/inventory';
+import {
+  InventoryCount,
+  Store,
+  Product,
+  MasterlistItem,
+  CountVarianceItem,
+  AppUser,
+  ManagedUser,
+  UserRole,
+  LocationRecountTask,
+  LocationTag,
+  LocationTagStatus,
+  LocationVerification,
+  CorrectionRequest,
+  StoreCountFinalization,
+  CountingSession,
+  CountType,
+} from '../types/inventory';
+import {
+  closeCountingSession,
+  createCountingSession,
+  DEFAULT_ANNUAL_SESSION_ID,
+  doesRecordBelongToSession,
+  getCountTypeLabel,
+  getCountTypeShortLabel,
+  reopenCountingSession,
+  subscribeToCountingSessions,
+} from '../services/sessionService';
 import { bulkImportMasterlist, getLocalCatalog, deleteProductFromCatalog, clearAllProducts } from '../services/catalogService';
 import { addStore, deleteStore, updateStore } from '../services/storeService';
 import {
@@ -12,6 +39,25 @@ import {
 } from '../services/userService';
 import { deleteCountsByStore, deleteAllCounts } from '../services/offlineSyncService';
 import { resetAuditTrail } from '../services/auditService';
+import {
+  computeVarianceLocationsForRecount,
+  getEffectiveCountsForReconciliation,
+  openLocationRecountTask,
+} from '../services/recountService';
+import {
+  bulkCreateAdminLocationTags,
+  bulkImportAdminLocationTags,
+  BulkLocationTagInput,
+  createAdminLocationTag,
+  deleteAdminLocationTag,
+  reviewLocationTagRequest,
+} from '../services/locationTagService';
+import {
+  evaluateStoreFinalizationReadiness,
+  finalizeStoreCounting,
+  reopenStoreCounting,
+  StoreFinalizationReadiness,
+} from '../services/finalizationService';
 import * as XLSX from 'xlsx';
 import {
   ShieldAlert,
@@ -54,6 +100,12 @@ interface AdminScreenProps {
   counts: InventoryCount[];
   stores: Store[];
   catalog: Product[];
+  locationRecounts?: LocationRecountTask[];
+  locationTags?: LocationTag[];
+  locationVerifications?: LocationVerification[];
+  correctionRequests?: CorrectionRequest[];
+  countFinalizations?: StoreCountFinalization[];
+  countingSessions?: CountingSession[];
   onCatalogUpdated: () => void;
   onStoresUpdated?: (stores: Store[]) => void;
   onUsersUpdated?: (users: ManagedUser[]) => void;
@@ -64,11 +116,17 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   counts,
   stores,
   catalog,
+  locationRecounts = [],
+  locationTags = [],
+  locationVerifications = [],
+  correctionRequests = [],
+  countFinalizations = [],
+  countingSessions: externalCountingSessions,
   onCatalogUpdated,
   onStoresUpdated,
   onUsersUpdated,
 }) => {
-  const [activeTab, setActiveTab] = useState<'upload_masterlist' | 'extract_counts' | 'manage_stores' | 'manage_users'>('upload_masterlist');
+  const [activeTab, setActiveTab] = useState<'upload_masterlist' | 'extract_counts' | 'manage_stores' | 'manage_locations' | 'manage_users'>('upload_masterlist');
 
   // Masterlist upload state
   const [dragActive, setDragActive] = useState<boolean>(false);
@@ -98,12 +156,35 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   const [editStoreLocation, setEditStoreLocation] = useState<string>('');
   const [isStoreSubmitting, setIsStoreSubmitting] = useState<boolean>(false);
 
-  // Extract counts state
+  // Extract counts & Session Management state
+  const [localCountingSessions, setLocalCountingSessions] = useState<CountingSession[]>([]);
+  const [selectedCountTypeFilter, setSelectedCountTypeFilter] = useState<'all' | CountType>('all');
+  const [selectedSessionIdFilter, setSelectedSessionIdFilter] = useState<string>('all');
+  const [showSessionCreator, setShowSessionCreator] = useState<boolean>(false);
+  const [newSessionType, setNewSessionType] = useState<CountType>('cycle');
+  const [newSessionTitle, setNewSessionTitle] = useState<string>('');
+  const [newSessionCutoff, setNewSessionCutoff] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [newSessionStoreId, setNewSessionStoreId] = useState<string>('ALL');
+  const [newSessionNotes, setNewSessionNotes] = useState<string>('');
+  const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
+  const [busySessionActionId, setBusySessionActionId] = useState<string | null>(null);
+  const [sessionMgmtNotice, setSessionMgmtNotice] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [selectedDateRange, setSelectedDateRange] = useState<'all' | 'today' | 'yesterday' | '7days' | '30days'>('all');
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [isOpeningAdminRecounts, setIsOpeningAdminRecounts] = useState<boolean>(false);
+  const [adminRecountNotice, setAdminRecountNotice] = useState<string | null>(null);
+  const [adminFinalizingStoreId, setAdminFinalizingStoreId] = useState<string | null>(null);
+  const [adminFinalizeNotice, setAdminFinalizeNotice] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   // Admin Delete Counts (By Store / All) with Password Confirmation
   const [deleteTargetStoreId, setDeleteTargetStoreId] = useState<string>(stores[0]?.storeId || '');
@@ -136,6 +217,24 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   const [editUserStoreId, setEditUserStoreId] = useState<string>('');
   const [isUserSubmitting, setIsUserSubmitting] = useState<boolean>(false);
 
+  // Location Tags & Supervisor Approvals state (Admin only)
+  const [locationBuilderStoreId, setLocationBuilderStoreId] = useState<string>(stores[0]?.storeId || 'ST-101');
+  const [newLocationNames, setNewLocationNames] = useState<string>('');
+  const [newLocationZone, setNewLocationZone] = useState<string>('');
+  const [newLocationCode, setNewLocationCode] = useState<string>('');
+  const [locationFilterStoreId, setLocationFilterStoreId] = useState<string>('all');
+  const [locationFilterStatus, setLocationFilterStatus] = useState<'all' | LocationTagStatus>('all');
+  const [locationSearchQuery, setLocationSearchQuery] = useState<string>('');
+  const [locationActionError, setLocationActionError] = useState<string | null>(null);
+  const [locationActionSuccess, setLocationActionSuccess] = useState<string | null>(null);
+  const [isSubmittingLocationTag, setIsSubmittingLocationTag] = useState<boolean>(false);
+  const [rejectionReasonMap, setRejectionReasonMap] = useState<Record<string, string>>({});
+  const [reviewingTagId, setReviewingTagId] = useState<string | null>(null);
+  const [locationDragActive, setLocationDragActive] = useState<boolean>(false);
+  const [isUploadingLocationFile, setIsUploadingLocationFile] = useState<boolean>(false);
+  const [locationUploadFileName, setLocationUploadFileName] = useState<string>('');
+  const locationFileInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     const unsub = subscribeToManagedUsers((fetched) => {
       setManagedUsers(fetched);
@@ -144,10 +243,388 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
   }, []);
 
   useEffect(() => {
+    if (externalCountingSessions !== undefined) return;
+    const unsub = subscribeToCountingSessions((fetched) => {
+      setLocalCountingSessions(fetched);
+    });
+    return () => unsub();
+  }, [externalCountingSessions]);
+
+  const countingSessions = externalCountingSessions ?? localCountingSessions;
+
+  useEffect(() => {
     if (stores.length > 0 && !stores.some((s) => s.storeId === deleteTargetStoreId)) {
       setDeleteTargetStoreId(stores[0].storeId);
     }
-  }, [stores, deleteTargetStoreId]);
+    if (
+      stores.length > 0 &&
+      locationBuilderStoreId !== 'ALL' &&
+      !stores.some((s) => s.storeId === locationBuilderStoreId)
+    ) {
+      setLocationBuilderStoreId(stores[0].storeId);
+    }
+  }, [stores, deleteTargetStoreId, locationBuilderStoreId]);
+
+  const pendingLocationRequests = useMemo(() => {
+    return locationTags
+      .filter((t) => t.status === 'pending_approval')
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [locationTags]);
+
+  const approvedLocationTagsCount = useMemo(
+    () => locationTags.filter((t) => t.status === 'approved').length,
+    [locationTags]
+  );
+
+  const filteredLocationTags = useMemo(() => {
+    const q = locationSearchQuery.trim().toLowerCase();
+    return locationTags
+      .filter((t) => {
+        if (locationFilterStoreId !== 'all' && t.storeId !== locationFilterStoreId) return false;
+        if (locationFilterStatus !== 'all' && t.status !== locationFilterStatus) return false;
+        if (q) {
+          const hit =
+            t.name.toLowerCase().includes(q) ||
+            t.storeName.toLowerCase().includes(q) ||
+            t.storeId.toLowerCase().includes(q) ||
+            (t.zone || '').toLowerCase().includes(q) ||
+            (t.code || '').toLowerCase().includes(q);
+          if (!hit) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const order: Record<LocationTagStatus, number> = {
+          pending_approval: 0,
+          approved: 1,
+          rejected: 2,
+        };
+        const diff = order[a.status] - order[b.status];
+        if (diff !== 0) return diff;
+        return a.name.localeCompare(b.name);
+      });
+  }, [locationTags, locationFilterStoreId, locationFilterStatus, locationSearchQuery]);
+
+  const handleCreateAdminLocationTags = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLocationActionError(null);
+    setLocationActionSuccess(null);
+
+    const isAllStores = locationBuilderStoreId === 'ALL';
+    const selectedSingleStore =
+      stores.find((s) => s.storeId === locationBuilderStoreId) || stores[0];
+    if ((isAllStores && stores.length === 0) || (!isAllStores && !selectedSingleStore)) {
+      setLocationActionError('Please select a valid retail store first.');
+      return;
+    }
+
+    const raw = newLocationNames.trim();
+    if (!raw) {
+      setLocationActionError('Enter one or more location tag names.');
+      return;
+    }
+
+    const isBatch = isAllStores || /[\n,;]/.test(raw);
+    setIsSubmittingLocationTag(true);
+    try {
+      if (isBatch) {
+        const targetStore: Store | 'ALL' = isAllStores ? 'ALL' : selectedSingleStore;
+        const { created, skipped } = await bulkCreateAdminLocationTags({
+          store: targetStore,
+          stores,
+          rawNames: raw,
+          zone: newLocationZone,
+          adminUser: currentUser,
+          existingTags: locationTags,
+        });
+        setNewLocationNames('');
+        setNewLocationZone('');
+        setNewLocationCode('');
+        const scopeLabel =
+          targetStore === 'ALL' ? `all ${stores.length} stores` : targetStore.name;
+        setLocationActionSuccess(
+          `Created ${created.length} approved location tag(s) for ${scopeLabel}${
+            skipped.length > 0 ? ` (skipped ${skipped.length} duplicate)` : ''
+          }.`
+        );
+      } else {
+        const created = await createAdminLocationTag({
+          store: selectedSingleStore,
+          name: raw,
+          zone: newLocationZone,
+          code: newLocationCode,
+          adminUser: currentUser,
+          existingTags: locationTags,
+        });
+        setNewLocationNames('');
+        setNewLocationZone('');
+        setNewLocationCode('');
+        setLocationActionSuccess(
+          `Created location tag "${created.name}" for ${selectedSingleStore.name}. Counters and supervisors can now tap to select it.`
+        );
+      }
+    } catch (err: any) {
+      setLocationActionError(err?.message || 'Failed to create location tag.');
+    } finally {
+      setIsSubmittingLocationTag(false);
+    }
+  };
+
+  const handleDownloadLocationTemplate = (format: 'xlsx' | 'csv') => {
+    const sampleStoreId =
+      locationBuilderStoreId !== 'ALL' ? locationBuilderStoreId : stores[0]?.storeId || 'ST-101';
+    const templateRows = [
+      {
+        'Location Name': 'Aisle 1 - Shelf A',
+        Zone: 'Main Floor',
+        Code: 'LOC-A1-SA',
+        'Store ID': sampleStoreId,
+      },
+      {
+        'Location Name': 'Aisle 1 - Shelf B',
+        Zone: 'Main Floor',
+        Code: 'LOC-A1-SB',
+        'Store ID': sampleStoreId,
+      },
+      {
+        'Location Name': 'Aisle 2 - Bay 1',
+        Zone: 'Beverages',
+        Code: 'LOC-A2-B1',
+        'Store ID': sampleStoreId,
+      },
+      {
+        'Location Name': 'Backroom Rack 1',
+        Zone: 'Backroom',
+        Code: 'LOC-BR-R1',
+        'Store ID': sampleStoreId,
+      },
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateRows);
+    ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Locations');
+
+    if (format === 'xlsx') {
+      XLSX.writeFile(wb, 'Location_Tags_Template.xlsx');
+    } else {
+      XLSX.writeFile(wb, 'Location_Tags_Template.csv', { bookType: 'csv' });
+    }
+  };
+
+  const processLocationUploadFile = async (file: File) => {
+    setLocationActionError(null);
+    setLocationActionSuccess(null);
+    setLocationUploadFileName(file.name);
+
+    const isAllStores = locationBuilderStoreId === 'ALL';
+    const selectedSingleStore =
+      stores.find((s) => s.storeId === locationBuilderStoreId) || stores[0];
+    if ((isAllStores && stores.length === 0) || (!isAllStores && !selectedSingleStore)) {
+      setLocationActionError('Please select a target store before uploading a location list.');
+      return;
+    }
+    const defaultTargetStore: Store | 'ALL' = isAllStores ? 'ALL' : selectedSingleStore;
+
+    setIsUploadingLocationFile(true);
+    try {
+      const lowerName = file.name.toLowerCase();
+      let items: BulkLocationTagInput[] = [];
+
+      if (lowerName.endsWith('.txt')) {
+        const text = await file.text();
+        items = text
+          .split(/[\r\n,;]+/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((name) => ({
+            name,
+            zone: newLocationZone.trim() || undefined,
+          }));
+      } else {
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: 'array' });
+        const firstSheet = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheet];
+
+        const rawRows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { defval: '' });
+        if (rawRows.length > 0) {
+          rawRows.forEach((row) => {
+            const normalized: Record<string, any> = {};
+            Object.keys(row).forEach((k) => {
+              const cleanKey = k.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+              normalized[cleanKey] = row[k];
+            });
+
+            const locName = String(
+              normalized['locationname'] ??
+                normalized['locationtag'] ??
+                normalized['location'] ??
+                normalized['tagname'] ??
+                normalized['tag'] ??
+                normalized['name'] ??
+                normalized['shelf'] ??
+                normalized['bin'] ??
+                normalized['bay'] ??
+                normalized['aisle'] ??
+                normalized['rack'] ??
+                normalized['loc'] ??
+                ''
+            ).trim();
+
+            if (!locName) return;
+
+            const zone = String(
+              normalized['zone'] ??
+                normalized['department'] ??
+                normalized['dept'] ??
+                normalized['area'] ??
+                normalized['floor'] ??
+                normalized['section'] ??
+                newLocationZone ??
+                ''
+            ).trim();
+
+            const code = String(
+              normalized['code'] ??
+                normalized['tagcode'] ??
+                normalized['locationcode'] ??
+                normalized['barcode'] ??
+                ''
+            ).trim();
+
+            const storeVal = String(
+              normalized['storeid'] ??
+                normalized['storecode'] ??
+                normalized['store'] ??
+                normalized['storename'] ??
+                normalized['branch'] ??
+                ''
+            ).trim();
+
+            items.push({
+              name: locName,
+              zone: zone || undefined,
+              code: code || undefined,
+              storeId: storeVal || undefined,
+            });
+          });
+        }
+
+        // Headerless single/multi-column fallback: read column A directly if no known header matched
+        if (items.length === 0) {
+          const matrix = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '' });
+          matrix.forEach((row) => {
+            if (!Array.isArray(row)) return;
+            const firstCell = String(row[0] ?? '').trim();
+            if (!firstCell) return;
+            const secondCell = row[1] !== undefined ? String(row[1]).trim() : '';
+            items.push({
+              name: firstCell,
+              zone: secondCell || newLocationZone.trim() || undefined,
+            });
+          });
+        }
+      }
+
+      if (items.length === 0) {
+        setLocationActionError(
+          `No location names found in "${file.name}". Upload an Excel/CSV with a "Location Name" column or a plain list of locations.`
+        );
+        return;
+      }
+
+      const { created, skipped, errors } = await bulkImportAdminLocationTags({
+        defaultStore: defaultTargetStore,
+        stores,
+        items,
+        adminUser: currentUser,
+        existingTags: locationTags,
+        sourceLabel: `Auto-uploaded location list from ${file.name}`,
+      });
+
+      const scopeLabel =
+        defaultTargetStore === 'ALL' ? `all ${stores.length} stores` : defaultTargetStore.name;
+
+      if (created.length > 0) {
+        setLocationActionSuccess(
+          `Auto-uploaded ${created.length} location tag(s) from "${file.name}" (${scopeLabel})${
+            skipped.length > 0 ? ` · Skipped ${skipped.length} duplicate(s)` : ''
+          }.`
+        );
+      } else if (skipped.length > 0) {
+        setLocationActionSuccess(
+          `All ${skipped.length} location(s) in "${file.name}" already exist as approved tags.`
+        );
+      }
+
+      if (errors.length > 0) {
+        setLocationActionError(errors.slice(0, 5).join(' '));
+      } else if (created.length === 0 && skipped.length === 0) {
+        setLocationActionError(`No valid locations could be uploaded from "${file.name}".`);
+      }
+    } catch (err: any) {
+      setLocationActionError(err?.message || `Failed to upload locations from "${file.name}".`);
+    } finally {
+      setIsUploadingLocationFile(false);
+      if (locationFileInputRef.current) {
+        locationFileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleReviewLocationRequest = async (
+    tag: LocationTag,
+    decision: 'approved' | 'rejected'
+  ) => {
+    setLocationActionError(null);
+    setLocationActionSuccess(null);
+    const reason = (rejectionReasonMap[tag.id] || '').trim();
+    if (decision === 'rejected' && !reason) {
+      setLocationActionError(
+        `Please enter a rejection reason for "${tag.name}" before rejecting.`
+      );
+      return;
+    }
+
+    setReviewingTagId(tag.id);
+    try {
+      await reviewLocationTagRequest({
+        tag,
+        decision,
+        adminUser: currentUser,
+        rejectionReason: reason,
+      });
+      setLocationActionSuccess(
+        decision === 'approved'
+          ? `Approved "${tag.name}" (${tag.storeName}). It is now clickable for counters and supervisors.`
+          : `Rejected location request "${tag.name}" (${tag.storeName}).`
+      );
+      setRejectionReasonMap((prev) => {
+        const next = { ...prev };
+        delete next[tag.id];
+        return next;
+      });
+    } catch (err: any) {
+      setLocationActionError(err?.message || 'Failed to review location request.');
+    } finally {
+      setReviewingTagId(null);
+    }
+  };
+
+  const handleDeleteLocationTag = async (tag: LocationTag) => {
+    setLocationActionError(null);
+    setLocationActionSuccess(null);
+    setReviewingTagId(tag.id);
+    try {
+      await deleteAdminLocationTag(tag, currentUser);
+      setLocationActionSuccess(`Removed location tag "${tag.name}" (${tag.storeName}).`);
+    } catch (err: any) {
+      setLocationActionError(err?.message || 'Failed to delete location tag.');
+    } finally {
+      setReviewingTagId(null);
+    }
+  };
 
   const targetStoreObj = useMemo(
     () => stores.find((s) => s.storeId === deleteTargetStoreId) || stores[0],
@@ -706,10 +1183,122 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     }
   };
 
-  // --- COUNT DATA EXTRACTION HANDLERS ---
+  // --- COUNTING SESSION & DATA EXTRACTION HANDLERS ---
+  const activeAdminSession = useMemo(
+    () =>
+      selectedSessionIdFilter !== 'all'
+        ? countingSessions.find((s) => s.id === selectedSessionIdFilter) || null
+        : null,
+    [selectedSessionIdFilter, countingSessions]
+  );
+
+  const filteredSessionsForSelect = useMemo(
+    () =>
+      countingSessions.filter(
+        (s) => selectedCountTypeFilter === 'all' || s.countType === selectedCountTypeFilter
+      ),
+    [countingSessions, selectedCountTypeFilter]
+  );
+
+  const sessionByIdMap = useMemo(() => {
+    const m = new Map<string, CountingSession>();
+    countingSessions.forEach((s) => m.set(s.id, s));
+    return m;
+  }, [countingSessions]);
+
+  const matchesAdminSessionFilter = (record: {
+    id?: string;
+    countType?: CountType;
+    sessionId?: string;
+  }) => {
+    if (activeAdminSession) {
+      return doesRecordBelongToSession(record, activeAdminSession);
+    }
+    if (selectedCountTypeFilter !== 'all') {
+      return (record.countType || 'annual') === selectedCountTypeFilter;
+    }
+    return true;
+  };
+
+  const handleAdminCreateSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSessionMgmtNotice(null);
+    setIsSavingSession(true);
+    try {
+      const targetStore =
+        newSessionStoreId === 'ALL'
+          ? 'ALL'
+          : stores.find((s) => s.storeId === newSessionStoreId) || 'ALL';
+      const created = await createCountingSession({
+        countType: newSessionType,
+        title: newSessionTitle,
+        cutoffDate: newSessionCutoff,
+        store: targetStore,
+        actor: currentUser,
+        notes: newSessionNotes,
+      });
+      setNewSessionTitle('');
+      setNewSessionNotes('');
+      setShowSessionCreator(false);
+      setSelectedCountTypeFilter(created.countType);
+      setSelectedSessionIdFilter(created.id);
+      setSessionMgmtNotice({
+        type: 'success',
+        text: `Created ${getCountTypeLabel(created.countType)} "${created.title}" with Cut-Off ${created.cutoffDate}.`,
+      });
+    } catch (err: any) {
+      setSessionMgmtNotice({
+        type: 'error',
+        text: err?.message || 'Failed to create counting session.',
+      });
+    } finally {
+      setIsSavingSession(false);
+    }
+  };
+
+  const handleAdminCloseSession = async (session: CountingSession) => {
+    setSessionMgmtNotice(null);
+    setBusySessionActionId(session.id);
+    try {
+      await closeCountingSession({ session, actor: currentUser });
+      setSessionMgmtNotice({
+        type: 'success',
+        text: `Closed "${session.title}" (Cut-Off ${session.cutoffDate}). Counts are locked and Supervisor System Balance is unlocked.`,
+      });
+    } catch (err: any) {
+      setSessionMgmtNotice({
+        type: 'error',
+        text: err?.message || 'Could not close counting session.',
+      });
+    } finally {
+      setBusySessionActionId(null);
+    }
+  };
+
+  const handleAdminReopenSession = async (session: CountingSession) => {
+    setSessionMgmtNotice(null);
+    setBusySessionActionId(session.id);
+    try {
+      await reopenCountingSession({ session, adminUser: currentUser });
+      setSessionMgmtNotice({
+        type: 'success',
+        text: `Re-opened "${session.title}" (Cut-Off ${session.cutoffDate}) for active counting.`,
+      });
+    } catch (err: any) {
+      setSessionMgmtNotice({
+        type: 'error',
+        text: err?.message || 'Could not re-open counting session.',
+      });
+    } finally {
+      setBusySessionActionId(null);
+    }
+  };
+
   const filteredCountsForExtraction = useMemo(() => {
     return counts.filter((c) => {
       if (c.status === 'voided') return false;
+      if (!matchesAdminSessionFilter(c)) return false;
+
       // Store filter
       if (selectedStore !== 'all') {
         const matchesStore = c.storeId === selectedStore || c.store.toLowerCase().includes(selectedStore.toLowerCase());
@@ -750,23 +1339,181 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
 
       return true;
     });
-  }, [counts, selectedStore, selectedLocation, selectedDateRange]);
+  }, [
+    counts,
+    selectedStore,
+    selectedLocation,
+    selectedDateRange,
+    selectedCountTypeFilter,
+    activeAdminSession,
+  ]);
 
-  // Reconciliation Variance Analysis between Masterlist and Counted Items
-  const reconciliationData: CountVarianceItem[] = useMemo(() => {
-    // 1. Group counts by SKU
+  const scopedAdminRecounts = useMemo(
+    () => locationRecounts.filter((r) => matchesAdminSessionFilter(r)),
+    [locationRecounts, selectedCountTypeFilter, activeAdminSession]
+  );
+
+  const effectiveReconciliation = useMemo(
+    () => getEffectiveCountsForReconciliation(filteredCountsForExtraction, scopedAdminRecounts),
+    [filteredCountsForExtraction, scopedAdminRecounts]
+  );
+
+  const detectedAdminVarianceLocations = useMemo(
+    () =>
+      computeVarianceLocationsForRecount({
+        counts: filteredCountsForExtraction,
+        catalog,
+        recountTasks: scopedAdminRecounts,
+        storeFilterId: selectedStore,
+        sessionId: activeAdminSession?.id,
+      }),
+    [filteredCountsForExtraction, catalog, scopedAdminRecounts, selectedStore, activeAdminSession?.id]
+  );
+
+  const unopenedAdminVarianceLocations = useMemo(
+    () => detectedAdminVarianceLocations.filter((loc) => !loc.existingTask),
+    [detectedAdminVarianceLocations]
+  );
+
+  const handleAdminOpenVarianceLocations = async () => {
+    if (unopenedAdminVarianceLocations.length === 0) return;
+    setIsOpeningAdminRecounts(true);
+    setAdminRecountNotice(null);
+    let opened = 0;
+    try {
+      for (const loc of unopenedAdminVarianceLocations) {
+        await openLocationRecountTask({
+          storeId: loc.storeId,
+          storeName: loc.storeName,
+          location: loc.location,
+          varianceSkus: loc.varianceSkus,
+          counts: filteredCountsForExtraction,
+          openedBy: currentUser,
+          session: activeAdminSession || undefined,
+        });
+        opened += 1;
+      }
+      setAdminRecountNotice(
+        `Opened ${opened} variance location(s) for Blind 2nd Count. 1st-round counters are automatically excluded per location.`
+      );
+    } catch (err: any) {
+      setAdminRecountNotice(err?.message || 'Failed to open variance locations for 2nd count.');
+    } finally {
+      setIsOpeningAdminRecounts(false);
+    }
+  };
+
+  const adminStoreReadinessList: StoreFinalizationReadiness[] = useMemo(() => {
+    const scopedStores =
+      selectedStore === 'all'
+        ? stores
+        : stores.filter((s) => s.storeId === selectedStore);
+    const modeFilteredCounts = counts.filter((c) => matchesAdminSessionFilter(c));
+    const modeFilteredVerifs = locationVerifications.filter((v) => matchesAdminSessionFilter(v));
+    const modeFilteredRecounts = locationRecounts.filter((r) => matchesAdminSessionFilter(r));
+    const modeFilteredCorrections = correctionRequests.filter((r) => matchesAdminSessionFilter(r));
+    const modeFilteredFinalizations = countFinalizations.filter((f) => matchesAdminSessionFilter(f));
+
+    return scopedStores.map((st) =>
+      evaluateStoreFinalizationReadiness({
+        store: st,
+        counts: modeFilteredCounts,
+        catalog,
+        locationVerifications: modeFilteredVerifs,
+        locationRecounts: modeFilteredRecounts,
+        correctionRequests: modeFilteredCorrections,
+        countFinalizations: modeFilteredFinalizations,
+        session: activeAdminSession || undefined,
+      })
+    );
+  }, [
+    stores,
+    selectedStore,
+    counts,
+    catalog,
+    locationVerifications,
+    locationRecounts,
+    correctionRequests,
+    countFinalizations,
+    selectedCountTypeFilter,
+    activeAdminSession,
+  ]);
+
+  const handleAdminFinalizeStore = async (r: StoreFinalizationReadiness) => {
+    const store = stores.find((s) => s.storeId === r.storeId);
+    if (!store) return;
+    setAdminFinalizeNotice(null);
+    setAdminFinalizingStoreId(r.storeId);
+    try {
+      await finalizeStoreCounting({
+        store,
+        actor: currentUser,
+        readiness: r,
+        session: activeAdminSession || undefined,
+      });
+      setAdminFinalizeNotice({
+        type: 'success',
+        text: `Finalized ${store.name} (${store.storeId}). Supervisors can now view finalized system balance.`,
+      });
+    } catch (err: any) {
+      setAdminFinalizeNotice({
+        type: 'error',
+        text: err?.message || 'Could not finalize store counting.',
+      });
+    } finally {
+      setAdminFinalizingStoreId(null);
+    }
+  };
+
+  const handleAdminReopenStore = async (r: StoreFinalizationReadiness) => {
+    const store = stores.find((s) => s.storeId === r.storeId);
+    if (!store) return;
+    setAdminFinalizeNotice(null);
+    setAdminFinalizingStoreId(r.storeId);
+    try {
+      await reopenStoreCounting({
+        store,
+        adminUser: currentUser,
+        existingFinalization: r.finalization,
+        session: activeAdminSession || undefined,
+      });
+      setAdminFinalizeNotice({
+        type: 'success',
+        text: `Re-opened ${store.name} (${store.storeId}). Supervisor system balance view is locked again.`,
+      });
+    } catch (err: any) {
+      setAdminFinalizeNotice({
+        type: 'error',
+        text: err?.message || 'Could not re-open store counting.',
+      });
+    } finally {
+      setAdminFinalizingStoreId(null);
+    }
+  };
+
+  // Reconciliation Variance Analysis between Masterlist and Effective Counted Items (Round 2 verified supersedes Round 1)
+  const reconciliationData: (CountVarianceItem & {
+    round1Quantity: number;
+    round2Quantity: number | null;
+  })[] = useMemo(() => {
+    const { effectiveCounts, round1QtyBySku, round2QtyBySku } = effectiveReconciliation;
+
+    // 1. Group effective counts by SKU
     const countMap = new Map<string, { qty: number; stores: Set<string>; locations: Set<string> }>();
-    filteredCountsForExtraction.forEach((c) => {
+    effectiveCounts.forEach((c) => {
       const key = c.sku.toLowerCase();
       const existing = countMap.get(key) || { qty: 0, stores: new Set(), locations: new Set() };
-      existing.qty += c.countedQuantity;
+      existing.qty += Number(c.countedQuantity) || 0;
       if (c.store) existing.stores.add(c.store);
       if (c.location) existing.locations.add(c.location);
       countMap.set(key, existing);
     });
 
     // 2. Iterate through catalog items
-    const varianceItems: CountVarianceItem[] = [];
+    const varianceItems: (CountVarianceItem & {
+      round1Quantity: number;
+      round2Quantity: number | null;
+    })[] = [];
     const visitedSkus = new Set<string>();
 
     catalog.forEach((prod) => {
@@ -774,11 +1521,13 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       visitedSkus.add(key);
       const countInfo = countMap.get(key);
       const countedQuantity = countInfo ? countInfo.qty : 0;
+      const round1Quantity = round1QtyBySku.get(key) ?? 0;
+      const round2Quantity = round2QtyBySku.has(key) ? (round2QtyBySku.get(key) ?? 0) : null;
       const systemStock = prod.systemStock ?? 0;
       const variance = countedQuantity - systemStock;
 
       let status: 'matched' | 'over' | 'under' | 'uncounted' = 'matched';
-      if (!countInfo || countedQuantity === 0) {
+      if (!countInfo && round1Quantity === 0) {
         status = 'uncounted';
       } else if (variance > 0) {
         status = 'over';
@@ -793,6 +1542,8 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         category: prod.category || 'General',
         systemStock,
         countedQuantity,
+        round1Quantity,
+        round2Quantity,
         variance,
         status,
         storesFound: countInfo ? Array.from(countInfo.stores) : [],
@@ -803,7 +1554,9 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     // 3. Include any items counted that were not in the official catalog
     countMap.forEach((info, key) => {
       if (!visitedSkus.has(key)) {
-        const sampleCount = filteredCountsForExtraction.find((c) => c.sku.toLowerCase() === key);
+        const sampleCount = effectiveCounts.find((c) => c.sku.toLowerCase() === key);
+        const round1Quantity = round1QtyBySku.get(key) ?? 0;
+        const round2Quantity = round2QtyBySku.has(key) ? (round2QtyBySku.get(key) ?? 0) : null;
         varianceItems.push({
           sku: sampleCount?.sku || key.toUpperCase(),
           barcode: sampleCount?.barcode || '',
@@ -811,6 +1564,8 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
           category: 'Uncataloged',
           systemStock: 0,
           countedQuantity: info.qty,
+          round1Quantity,
+          round2Quantity,
           variance: info.qty,
           status: 'over',
           storesFound: Array.from(info.stores),
@@ -820,7 +1575,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     });
 
     return varianceItems;
-  }, [catalog, filteredCountsForExtraction]);
+  }, [catalog, effectiveReconciliation]);
 
   // Export to Excel (.xlsx)
   const handleExtractToExcel = () => {
@@ -836,28 +1591,39 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       const wb = XLSX.utils.book_new();
 
       // 1. Sheet 1: Detailed Physical Counts Audit
-      const detailedData = filteredCountsForExtraction.map((c, idx) => ({
-        '#': idx + 1,
-        'Count ID': c.id,
-        Date: c.date,
-        Time: c.time,
-        Store: c.store,
-        'Store ID': c.storeId,
-        'Shelf/Bin Location': c.location || 'Not Specified',
-        SKU: c.sku,
-        Barcode: c.barcode,
-        'Item Description': c.itemDescription,
-        'Counted Quantity': c.countedQuantity,
-        Classification: c.condition || 'Good',
-        Remarks: c.remarks || '',
-        'Counter Username': c.username,
-        'User ID': c.userId,
-      }));
+      const detailedData = filteredCountsForExtraction.map((c, idx) => {
+        const ses = c.sessionId ? sessionByIdMap.get(c.sessionId) : undefined;
+        return {
+          '#': idx + 1,
+          'Count ID': c.id,
+          'Count Mode': getCountTypeLabel(c.countType || ses?.countType),
+          Session: ses?.title || (c.sessionId === DEFAULT_ANNUAL_SESSION_ID || !c.sessionId ? 'Annual Inventory Count (Baseline)' : c.sessionId),
+          'Cut-Off Date': c.cutoffDate || ses?.cutoffDate || '—',
+          Round: (c.countRound ?? 1) === 2 ? '2nd Count' : '1st Count',
+          Date: c.date,
+          Time: c.time,
+          Store: c.store,
+          'Store ID': c.storeId,
+          'Shelf/Bin Location': c.location || 'Not Specified',
+          SKU: c.sku,
+          Barcode: c.barcode,
+          'Item Description': c.itemDescription,
+          'Counted Quantity': c.countedQuantity,
+          Classification: c.condition || 'Good',
+          Remarks: c.remarks || '',
+          'Counter Username': c.username,
+          'User ID': c.userId,
+        };
+      });
 
       const wsDetailed = XLSX.utils.json_to_sheet(detailedData);
       wsDetailed['!cols'] = [
         { wch: 6 },
         { wch: 22 },
+        { wch: 22 },
+        { wch: 26 },
+        { wch: 13 },
+        { wch: 11 },
         { wch: 12 },
         { wch: 10 },
         { wch: 22 },
@@ -874,7 +1640,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       ];
       XLSX.utils.book_append_sheet(wb, wsDetailed, 'Detailed Counts');
 
-      // 2. Sheet 2: Masterlist Reconciliation & Variance
+      // 2. Sheet 2: Masterlist Reconciliation & Variance (with 1st vs 2nd Count)
       const varianceExportData = reconciliationData.map((v, idx) => ({
         '#': idx + 1,
         SKU: v.sku,
@@ -882,8 +1648,10 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         Description: v.description,
         Category: v.category,
         'System Stock': v.systemStock,
-        'Physical Counted': v.countedQuantity,
-        'Variance (+/-)': v.variance,
+        '1st Count Qty': v.round1Quantity,
+        '2nd Count Qty': v.round2Quantity !== null ? v.round2Quantity : '—',
+        'Final Counted Qty': v.countedQuantity,
+        'Final Variance (+/-)': v.variance,
         'Variance Status': v.status.toUpperCase(),
         'Locations Found': v.locationsFound.join(', ') || 'N/A',
         'Stores Found': v.storesFound.join(', ') || 'N/A',
@@ -897,17 +1665,19 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         { wch: 36 },
         { wch: 16 },
         { wch: 14 },
-        { wch: 16 },
         { wch: 14 },
+        { wch: 14 },
+        { wch: 16 },
+        { wch: 16 },
         { wch: 16 },
         { wch: 26 },
         { wch: 26 },
       ];
       XLSX.utils.book_append_sheet(wb, wsVariance, 'Masterlist Reconciliation');
 
-      // 3. Sheet 3: Store & Location Summary
+      // 3. Sheet 3: Store & Location Summary (uses effective counts so Round 2 verified doesn't double-count)
       const locSummaryMap = new Map<string, { totalUnits: number; countRecords: number }>();
-      filteredCountsForExtraction.forEach((c) => {
+      effectiveReconciliation.effectiveCounts.forEach((c) => {
         const locKey = `${c.store} — ${c.location || 'General Floor'}`;
         const prev = locSummaryMap.get(locKey) || { totalUnits: 0, countRecords: 0 };
         prev.totalUnits += c.countedQuantity;
@@ -917,17 +1687,22 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
 
       const locSummaryData = Array.from(locSummaryMap.entries()).map(([key, data]) => ({
         'Store & Location': key,
-        'Total Physical Units': data.totalUnits,
-        'Number of Counts': data.countRecords,
+        'Total Effective Units': data.totalUnits,
+        'Number of Effective Counts': data.countRecords,
       }));
 
       const wsLocSummary = XLSX.utils.json_to_sheet(locSummaryData);
-      wsLocSummary['!cols'] = [{ wch: 36 }, { wch: 20 }, { wch: 18 }];
+      wsLocSummary['!cols'] = [{ wch: 36 }, { wch: 20 }, { wch: 22 }];
       XLSX.utils.book_append_sheet(wb, wsLocSummary, 'Location Summary');
 
       // 4. Download file
       const dateTag = new Date().toISOString().split('T')[0];
-      const filename = `Inventory_Count_Extraction_${dateTag}.xlsx`;
+      const modePrefix = activeAdminSession
+        ? `${getCountTypeShortLabel(activeAdminSession.countType)}_${activeAdminSession.cutoffDate}_`
+        : selectedCountTypeFilter !== 'all'
+        ? `${getCountTypeShortLabel(selectedCountTypeFilter)}_`
+        : '';
+      const filename = `${modePrefix}Inventory_Count_Extraction_${dateTag}.xlsx`;
       XLSX.writeFile(wb, filename);
 
       setExportNotice(`Extracted ${filteredCountsForExtraction.length} records into ${filename}`);
@@ -947,28 +1722,40 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
     }
 
     try {
-      const csvData = filteredCountsForExtraction.map((c) => ({
-        Date: c.date,
-        Time: c.time,
-        Store: c.store,
-        StoreID: c.storeId,
-        Location: c.location || '',
-        SKU: c.sku,
-        Barcode: c.barcode,
-        Description: c.itemDescription,
-        CountedQuantity: c.countedQuantity,
-        Classification: c.condition || 'Good',
-        Remarks: c.remarks || '',
-        Username: c.username,
-        UserID: c.userId,
-      }));
+      const csvData = filteredCountsForExtraction.map((c) => {
+        const ses = c.sessionId ? sessionByIdMap.get(c.sessionId) : undefined;
+        return {
+          CountMode: getCountTypeLabel(c.countType || ses?.countType),
+          Session: ses?.title || (c.sessionId === DEFAULT_ANNUAL_SESSION_ID || !c.sessionId ? 'Baseline' : c.sessionId),
+          CutoffDate: c.cutoffDate || ses?.cutoffDate || '',
+          Round: (c.countRound ?? 1) === 2 ? '2nd Count' : '1st Count',
+          Date: c.date,
+          Time: c.time,
+          Store: c.store,
+          StoreID: c.storeId,
+          Location: c.location || '',
+          SKU: c.sku,
+          Barcode: c.barcode,
+          Description: c.itemDescription,
+          CountedQuantity: c.countedQuantity,
+          Classification: c.condition || 'Good',
+          Remarks: c.remarks || '',
+          Username: c.username,
+          UserID: c.userId,
+        };
+      });
 
       const ws = XLSX.utils.json_to_sheet(csvData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Counts');
 
       const dateTag = new Date().toISOString().split('T')[0];
-      const filename = `Inventory_Counts_${dateTag}.csv`;
+      const modePrefix = activeAdminSession
+        ? `${getCountTypeShortLabel(activeAdminSession.countType)}_${activeAdminSession.cutoffDate}_`
+        : selectedCountTypeFilter !== 'all'
+        ? `${getCountTypeShortLabel(selectedCountTypeFilter)}_`
+        : '';
+      const filename = `${modePrefix}Inventory_Counts_${dateTag}.csv`;
       XLSX.writeFile(wb, filename, { bookType: 'csv' });
       setExportNotice(`Extracted CSV feed into ${filename}`);
     } catch (err: any) {
@@ -1053,11 +1840,11 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         </div>
       </div>
 
-      {/* Main Workspace Navigation Switcher (4 Tabs) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 p-1.5 rounded-2xl bg-slate-900 border border-slate-800 text-xs font-bold gap-1">
+      {/* Main Workspace Navigation Switcher (5 Tabs) */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 p-1.5 rounded-2xl bg-slate-900 border border-slate-800 text-xs font-bold gap-1">
         <button
           onClick={() => setActiveTab('upload_masterlist')}
-          className={`py-2.5 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
+          className={`min-h-[44px] py-2 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
             activeTab === 'upload_masterlist'
               ? 'bg-purple-600 text-white shadow-lg shadow-purple-950'
               : 'text-slate-400 hover:text-white'
@@ -1069,7 +1856,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
 
         <button
           onClick={() => setActiveTab('extract_counts')}
-          className={`py-2.5 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
+          className={`min-h-[44px] py-2 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
             activeTab === 'extract_counts'
               ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-950'
               : 'text-slate-400 hover:text-white'
@@ -1081,7 +1868,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
 
         <button
           onClick={() => setActiveTab('manage_stores')}
-          className={`py-2.5 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
+          className={`min-h-[44px] py-2 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
             activeTab === 'manage_stores'
               ? 'bg-blue-600 text-white shadow-lg shadow-blue-950'
               : 'text-slate-400 hover:text-white'
@@ -1092,8 +1879,25 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
         </button>
 
         <button
+          onClick={() => setActiveTab('manage_locations')}
+          className={`min-h-[44px] py-2 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
+            activeTab === 'manage_locations'
+              ? 'bg-teal-600 text-white shadow-lg shadow-teal-950'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <MapPin className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Locations ({approvedLocationTagsCount})</span>
+          {pendingLocationRequests.length > 0 && (
+            <span className="rounded-full bg-amber-400 text-slate-950 px-1.5 py-0.5 text-[10px] font-black tabular-nums shrink-0">
+              {pendingLocationRequests.length}
+            </span>
+          )}
+        </button>
+
+        <button
           onClick={() => setActiveTab('manage_users')}
-          className={`py-2.5 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
+          className={`col-span-2 sm:col-span-1 min-h-[44px] py-2 px-1.5 rounded-xl transition flex items-center justify-center gap-1.5 ${
             activeTab === 'manage_users'
               ? 'bg-amber-600 text-white shadow-lg shadow-amber-950'
               : 'text-slate-400 hover:text-white'
@@ -1435,7 +2239,54 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
           )}
 
           {/* Extraction Filter Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            {/* Count Mode Filter */}
+            <div className="rounded-xl bg-slate-900 border border-slate-800 p-3 space-y-1.5">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Count Mode</span>
+              </label>
+              <select
+                value={selectedCountTypeFilter}
+                onChange={(e) => {
+                  const next = e.target.value as 'all' | CountType;
+                  setSelectedCountTypeFilter(next);
+                  if (
+                    next !== 'all' &&
+                    selectedSessionIdFilter !== 'all' &&
+                    sessionByIdMap.get(selectedSessionIdFilter)?.countType !== next
+                  ) {
+                    setSelectedSessionIdFilter('all');
+                  }
+                }}
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-white focus:border-cyan-400 focus:outline-none"
+              >
+                <option value="all">All Modes</option>
+                <option value="cycle">Cycle Count</option>
+                <option value="annual">Annual Inventory Count</option>
+              </select>
+            </div>
+
+            {/* Session & Cut-Off Filter */}
+            <div className="rounded-xl bg-slate-900 border border-slate-800 p-3 space-y-1.5">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Session &amp; Cut-Off</span>
+              </label>
+              <select
+                value={selectedSessionIdFilter}
+                onChange={(e) => setSelectedSessionIdFilter(e.target.value)}
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-white focus:border-indigo-400 focus:outline-none"
+              >
+                <option value="all">All Sessions</option>
+                {filteredSessionsForSelect.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    [{getCountTypeShortLabel(s.countType)}] {s.title} · {s.cutoffDate} ({s.status === 'closed' ? 'Closed' : 'Active'})
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Store Filter */}
             <div className="rounded-xl bg-slate-900 border border-slate-800 p-3 space-y-1.5">
               <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -1504,24 +2355,371 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
             </div>
 
             <div className="rounded-2xl bg-slate-900 border border-slate-800 p-3.5">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Total Units Counted</span>
-              <span className="text-xl font-black text-emerald-400 font-mono mt-0.5 block">
-                {filteredCountsForExtraction.reduce((acc, c) => acc + c.countedQuantity, 0).toLocaleString()}
+              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Effective Reconciled Units</span>
+              <span className="text-xl font-black text-emerald-400 font-mono tabular-nums mt-0.5 block">
+                {effectiveReconciliation.effectiveCounts
+                  .reduce((acc, c) => acc + c.countedQuantity, 0)
+                  .toLocaleString()}
               </span>
             </div>
 
             <div className="rounded-2xl bg-slate-900 border border-slate-800 p-3.5">
               <span className="text-[10px] text-slate-400 uppercase font-semibold block">Masterlist Reconciled</span>
-              <span className="text-xl font-black text-purple-400 font-mono mt-0.5 block">
+              <span className="text-xl font-black text-purple-400 font-mono tabular-nums mt-0.5 block">
                 {reconciliationData.filter((r) => r.status === 'matched').length} / {reconciliationData.length} SKUs
               </span>
             </div>
 
             <div className="rounded-2xl bg-slate-900 border border-slate-800 p-3.5">
               <span className="text-[10px] text-slate-400 uppercase font-semibold block">Discrepancies</span>
-              <span className="text-xl font-black text-amber-400 font-mono mt-0.5 block">
+              <span className="text-xl font-black text-amber-400 font-mono tabular-nums mt-0.5 block">
                 {reconciliationData.filter((r) => r.status === 'over' || r.status === 'under').length} SKUs
               </span>
+            </div>
+          </div>
+
+          {/* Counting Sessions & Cut-Off Dates Management */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-cyan-400" />
+                  <span>Counting Sessions &amp; Cut-Off Dates ({countingSessions.length})</span>
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Define Cycle Count or Annual Inventory Count sessions, tag cut-off dates, close completed sessions, or re-open closed sessions.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSessionMgmtNotice(null);
+                  setShowSessionCreator((prev) => !prev);
+                }}
+                className="shrink-0 h-10 px-3.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow transition active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{showSessionCreator ? 'Cancel' : 'New Session & Cut-Off'}</span>
+              </button>
+            </div>
+
+            {sessionMgmtNotice && (
+              <div
+                className={`rounded-xl border p-3 text-xs font-medium flex items-center justify-between gap-2 ${
+                  sessionMgmtNotice.type === 'success'
+                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                    : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                }`}
+              >
+                <span>{sessionMgmtNotice.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setSessionMgmtNotice(null)}
+                  className="text-[11px] underline text-slate-300 hover:text-white shrink-0"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {showSessionCreator && (
+              <form
+                onSubmit={handleAdminCreateSession}
+                className="rounded-xl bg-slate-950 border border-cyan-500/35 p-3.5 space-y-3"
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Count Mode
+                    </label>
+                    <select
+                      value={newSessionType}
+                      onChange={(e) => setNewSessionType(e.target.value as CountType)}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                    >
+                      <option value="cycle">Cycle Count</option>
+                      <option value="annual">Annual Inventory Count</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Session Name
+                    </label>
+                    <input
+                      type="text"
+                      value={newSessionTitle}
+                      onChange={(e) => setNewSessionTitle(e.target.value)}
+                      placeholder={
+                        newSessionType === 'cycle'
+                          ? 'e.g. Cycle Count - Beverages Q2'
+                          : 'e.g. Annual Inventory FY2026'
+                      }
+                      required
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-white placeholder-slate-500 focus:border-cyan-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Cut-Off Date
+                    </label>
+                    <input
+                      type="date"
+                      value={newSessionCutoff}
+                      onChange={(e) => setNewSessionCutoff(e.target.value)}
+                      required
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Branch Scope
+                    </label>
+                    <select
+                      value={newSessionStoreId}
+                      onChange={(e) => setNewSessionStoreId(e.target.value)}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                    >
+                      <option value="ALL">All Retail Stores</option>
+                      {stores.map((st) => (
+                        <option key={st.storeId} value={st.storeId}>
+                          {st.name} ({st.storeId})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={newSessionNotes}
+                    onChange={(e) => setNewSessionNotes(e.target.value)}
+                    placeholder="Optional notes or category scope..."
+                    className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-white placeholder-slate-500 focus:border-cyan-400 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSavingSession}
+                    className="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition active:scale-95 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {isSavingSession ? 'Creating...' : 'Create Session'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+              {countingSessions.map((ses) => {
+                const sessionRecordCount = counts.filter(
+                  (c) => c.status !== 'voided' && doesRecordBelongToSession(c, ses)
+                ).length;
+                const isSelected = selectedSessionIdFilter === ses.id;
+                const isBusy = busySessionActionId === ses.id;
+                return (
+                  <div
+                    key={ses.id}
+                    className={`rounded-xl border p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition ${
+                      isSelected
+                        ? 'bg-slate-950 border-cyan-500/50'
+                        : 'bg-slate-950 border-slate-800'
+                    }`}
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-black uppercase ${
+                            ses.countType === 'cycle'
+                              ? 'bg-cyan-500/20 text-cyan-300'
+                              : 'bg-indigo-500/20 text-indigo-300'
+                          }`}
+                        >
+                          {getCountTypeShortLabel(ses.countType)}
+                        </span>
+                        <span className="text-xs font-bold text-white truncate">{ses.title}</span>
+                        <span
+                          className={`text-[11px] font-bold ${
+                            ses.status === 'closed' ? 'text-emerald-400' : 'text-amber-300'
+                          }`}
+                        >
+                          · {ses.status === 'closed' ? 'Closed & Finalized' : 'Active'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 font-mono tabular-nums">
+                        Cut-Off: {ses.cutoffDate} · {ses.storeName} · {sessionRecordCount} record(s)
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedSessionIdFilter('all');
+                          } else {
+                            setSelectedCountTypeFilter(ses.countType);
+                            setSelectedSessionIdFilter(ses.id);
+                          }
+                        }}
+                        className={`h-8 px-2.5 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
+                          isSelected
+                            ? 'bg-cyan-600 text-white'
+                            : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                      >
+                        {isSelected ? 'Filtered' : 'Filter Extract'}
+                      </button>
+
+                      {ses.status === 'active' ? (
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => handleAdminCloseSession(ses)}
+                          className="h-8 px-2.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-[11px] font-bold text-emerald-300 transition disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {isBusy ? 'Updating...' : 'Close Session'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => handleAdminReopenSession(ses)}
+                          className="h-8 px-2.5 rounded-lg bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/40 text-[11px] font-bold text-amber-300 transition disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {isBusy ? 'Updating...' : 'Re-open'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Second Count Variance Locations Quick Trigger */}
+          {(unopenedAdminVarianceLocations.length > 0 || adminRecountNotice) && (
+            <div className="rounded-2xl bg-slate-900 border border-amber-500/35 p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                  <RefreshCw className="w-4 h-4 text-amber-400" />
+                  <span>
+                    Per-Location 2nd Count Queue ({unopenedAdminVarianceLocations.length} variance location
+                    {unopenedAdminVarianceLocations.length === 1 ? '' : 's'} not yet opened)
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  {adminRecountNotice ||
+                    'Open locations with SKU variances for blind 2nd count. Associates who counted a location in Round 1 are automatically excluded from recounting that location.'}
+                </p>
+              </div>
+              {unopenedAdminVarianceLocations.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleAdminOpenVarianceLocations}
+                  disabled={isOpeningAdminRecounts}
+                  className="shrink-0 h-10 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-xs font-bold text-white shadow active:scale-95 transition disabled:opacity-50"
+                >
+                  {isOpeningAdminRecounts
+                    ? 'Opening Locations...'
+                    : `Open Variance Locations (${unopenedAdminVarianceLocations.length})`}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Store Count Finalization & Supervisor System Balance Gate */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>Counting Finalization &amp; Supervisor System Balance Gate</span>
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Supervisors cannot view Masterlist system balances until Round 1 checks and all 2nd counts are completed and counting is finalized.
+                </p>
+              </div>
+            </div>
+
+            {adminFinalizeNotice && (
+              <div
+                className={`rounded-xl border p-3 text-xs font-medium flex items-center justify-between gap-2 ${
+                  adminFinalizeNotice.type === 'success'
+                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                    : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                }`}
+              >
+                <span>{adminFinalizeNotice.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setAdminFinalizeNotice(null)}
+                  className="text-[11px] underline text-slate-300 hover:text-white shrink-0"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {adminStoreReadinessList.map((r) => (
+                <div
+                  key={r.storeId}
+                  className="rounded-xl bg-slate-950 border border-slate-800 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-bold text-white">
+                        {r.storeName} ({r.storeId})
+                      </span>
+                      <span
+                        className={`text-[11px] font-bold ${
+                          r.isFinalized
+                            ? 'text-emerald-400'
+                            : r.canFinalize
+                            ? 'text-amber-300'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        ·{' '}
+                        {r.isFinalized
+                          ? 'Finalized (System Balance Unlocked)'
+                          : r.canFinalize
+                          ? '2nd Counting Done · Ready to Finalize'
+                          : 'Counting in Progress (System Balance Locked)'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 tabular-nums">
+                      Counts: {r.activeCountRecords} · Round 1 Verified: {r.verifiedLocationsCount}/
+                      {r.totalLocationsCounted} · 2nd Counts Done: {r.verifiedRecountCount}
+                      {r.unopenedVarianceCount + r.openRecountCount + r.pendingReviewRecountCount > 0
+                        ? ` (${r.unopenedVarianceCount + r.openRecountCount + r.pendingReviewRecountCount} pending)`
+                        : ''}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {r.isFinalized ? (
+                      <button
+                        type="button"
+                        disabled={adminFinalizingStoreId === r.storeId}
+                        onClick={() => handleAdminReopenStore(r)}
+                        className="min-h-[40px] px-3.5 rounded-xl bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/40 text-xs font-bold text-amber-300 transition active:scale-95 disabled:opacity-50"
+                      >
+                        {adminFinalizingStoreId === r.storeId ? 'Updating...' : 'Re-open Counting'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!r.canFinalize || adminFinalizingStoreId === r.storeId}
+                        onClick={() => handleAdminFinalizeStore(r)}
+                        className="min-h-[40px] px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow transition active:scale-95 disabled:opacity-40"
+                      >
+                        {adminFinalizingStoreId === r.storeId
+                          ? 'Finalizing...'
+                          : 'Finalize Counting'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -1531,7 +2729,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
               <div>
                 <h4 className="text-sm font-bold text-white">Physical Count vs. Masterlist Variance</h4>
                 <p className="text-xs text-slate-400">
-                  Real-time variance calculation against uploaded system stock
+                  Verified 2nd-count quantities supersede Round 1 for recounted location-SKUs
                 </p>
               </div>
               <span className="text-[10px] text-slate-500 font-mono">
@@ -1545,18 +2743,24 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                   <tr>
                     <th className="px-3 py-2">SKU</th>
                     <th className="px-3 py-2">Description</th>
-                    <th className="px-3 py-2 text-right">System Stock</th>
-                    <th className="px-3 py-2 text-right">Physical Count</th>
+                    <th className="px-3 py-2 text-right">System</th>
+                    <th className="px-3 py-2 text-right">1st Count</th>
+                    <th className="px-3 py-2 text-right">2nd Count</th>
+                    <th className="px-3 py-2 text-right">Final Qty</th>
                     <th className="px-3 py-2 text-right">Variance</th>
                     <th className="px-3 py-2 text-center">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/80 bg-slate-900/40 font-mono text-[11px]">
+                <tbody className="divide-y divide-slate-800/80 bg-slate-900/40 font-mono tabular-nums text-[11px]">
                   {reconciliationData.slice(0, 15).map((row, idx) => (
                     <tr key={idx} className="hover:bg-slate-800/30">
                       <td className="px-3 py-2 font-bold text-purple-300">{row.sku}</td>
-                      <td className="px-3 py-2 font-sans text-slate-200 truncate max-w-[200px]">{row.description}</td>
+                      <td className="px-3 py-2 font-sans text-slate-200 truncate max-w-[180px]">{row.description}</td>
                       <td className="px-3 py-2 text-right text-slate-400">{row.systemStock}</td>
+                      <td className="px-3 py-2 text-right text-slate-300">{row.round1Quantity}</td>
+                      <td className="px-3 py-2 text-right text-amber-300 font-semibold">
+                        {row.round2Quantity !== null ? row.round2Quantity : '—'}
+                      </td>
                       <td className="px-3 py-2 text-right text-white font-bold">{row.countedQuantity}</td>
                       <td className={`px-3 py-2 text-right font-bold ${
                         row.variance === 0
@@ -1588,10 +2792,10 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
 
             {/* Quick Extraction Action Footer */}
             <div className="pt-2 flex items-center justify-between text-xs text-slate-400">
-              <span>Showing first 15 SKUs. Full variance analysis will be included in Sheet 2 of the Excel extract.</span>
+              <span>Showing first 15 SKUs. Full 1st vs. 2nd count variance analysis included in Sheet 2 of Excel extract.</span>
               <button
                 onClick={handleExtractToExcel}
-                className="text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1"
+                className="text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 shrink-0"
               >
                 <span>Extract All Records Now</span>
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -1909,7 +3113,454 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 4: MANAGE USERS & STORE ASSIGNMENTS (ADMIN ONLY) */}
+      {/* TAB 4: MANAGE LOCATION TAGS & SUPERVISOR REQUEST APPROVALS (ADMIN ONLY) */}
+      {/* ========================================================================= */}
+      {activeTab === 'manage_locations' && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          {/* Header Card */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-teal-400">
+                Location Tags &amp; Approvals
+              </span>
+              <span className="rounded-md bg-teal-500/20 text-teal-300 px-2 py-0.5 text-[10px] font-black uppercase">
+                Click-to-Select Standard
+              </span>
+            </div>
+            <h3 className="text-base font-black text-white">
+              Store Counting Locations ({approvedLocationTagsCount} Approved)
+            </h3>
+            <p className="text-xs text-slate-400 max-w-2xl">
+              Create standardized location tags per store so counters and supervisors simply tap a location to start counting. New locations requested by supervisors appear below for Admin approval.
+            </p>
+          </div>
+
+          {locationActionSuccess && (
+            <div className="flex items-center justify-between rounded-xl bg-emerald-600/20 border border-emerald-500/30 p-3 text-xs text-emerald-300">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-medium">{locationActionSuccess}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLocationActionSuccess(null)}
+                className="text-emerald-400 hover:text-white p-1"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {locationActionError && (
+            <div className="flex items-center justify-between rounded-xl bg-rose-500/15 border border-rose-500/30 p-3 text-xs text-rose-300">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span className="font-medium">{locationActionError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLocationActionError(null)}
+                className="text-rose-400 hover:text-white p-1"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Supervisor Requests Approval Queue */}
+          <div className="rounded-2xl bg-slate-900 border border-amber-500/30 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                <h4 className="text-sm font-bold text-white">
+                  Supervisor Location Requests ({pendingLocationRequests.length})
+                </h4>
+              </div>
+              <span className="text-[11px] text-slate-400">
+                Requires Admin approval before counters can tap
+              </span>
+            </div>
+
+            {pendingLocationRequests.length === 0 ? (
+              <div className="rounded-xl bg-slate-950 border border-slate-800 px-3.5 py-3 text-xs text-slate-400">
+                No pending location requests from supervisors right now.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {pendingLocationRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className="rounded-xl bg-slate-950 border border-slate-800 p-3.5 space-y-2.5"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-sm font-bold text-white">
+                            {req.name}
+                          </span>
+                          <span className="rounded bg-amber-500/20 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-300">
+                            Pending Approval
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {req.storeName} ({req.storeId})
+                          {req.zone ? ` · Zone: ${req.zone}` : ''}
+                          {` · Requested by ${req.createdByName} · ${req.createdDate} ${req.createdTime}`}
+                        </div>
+                        {req.notes && (
+                          <p className="text-xs text-slate-300 pt-0.5">Note: {req.notes}</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1 border-t border-slate-800/80">
+                      <input
+                        type="text"
+                        value={rejectionReasonMap[req.id] || ''}
+                        onChange={(e) =>
+                          setRejectionReasonMap((prev) => ({
+                            ...prev,
+                            [req.id]: e.target.value,
+                          }))
+                        }
+                        placeholder="Rejection reason (required only if rejecting)..."
+                        className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 min-h-[44px] text-xs text-white placeholder-slate-500 focus:border-amber-400 focus:outline-none"
+                      />
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleReviewLocationRequest(req, 'rejected')}
+                          disabled={reviewingTagId === req.id}
+                          className="min-h-[44px] px-3.5 rounded-xl bg-rose-600/20 hover:bg-rose-600/35 border border-rose-500/40 text-xs font-bold text-rose-300 transition active:scale-95 disabled:opacity-50"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReviewLocationRequest(req, 'approved')}
+                          disabled={reviewingTagId === req.id}
+                          className="min-h-[44px] px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow transition active:scale-95 disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>{reviewingTagId === req.id ? 'Saving...' : 'Approve Tag'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Auto-Upload Location List Card (Excel / CSV / TXT) */}
+          <div className="rounded-2xl bg-slate-900 border border-teal-500/30 p-4 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Upload className="w-4 h-4 text-teal-400" />
+                  <span>Quick Upload Location List (Auto-Upload)</span>
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
+                  Select a store (or All Retail Stores) and drop an{' '}
+                  <code className="text-teal-300">.xlsx</code>,{' '}
+                  <code className="text-teal-300">.csv</code>, or{' '}
+                  <code className="text-teal-300">.txt</code> location list — locations are parsed and uploaded automatically.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleDownloadLocationTemplate('xlsx')}
+                  className="min-h-[44px] px-3 rounded-xl bg-slate-950 border border-slate-700 hover:border-teal-400 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                  <span>Excel Template</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDownloadLocationTemplate('csv')}
+                  className="min-h-[44px] px-3 rounded-xl bg-slate-950 border border-slate-700 hover:border-teal-400 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+                >
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  <span>CSV Template</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Target Store (Default if file has no Store ID column)
+                </label>
+                <select
+                  value={locationBuilderStoreId}
+                  onChange={(e) => setLocationBuilderStoreId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 min-h-[44px] text-xs text-white focus:border-teal-400 focus:outline-none"
+                >
+                  <option value="ALL">All Retail Stores ({stores.length} Branches)</option>
+                  {stores.map((s) => (
+                    <option key={s.storeId} value={s.storeId}>
+                      {s.name} ({s.storeId})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Default Zone / Department (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newLocationZone}
+                  onChange={(e) => setNewLocationZone(e.target.value)}
+                  placeholder="e.g. Main Floor, Backroom"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 min-h-[44px] text-xs text-white placeholder-slate-500 focus:border-teal-400 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div
+              onDragEnter={(e) => {
+                e.preventDefault();
+                setLocationDragActive(true);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setLocationDragActive(true);
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                setLocationDragActive(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setLocationDragActive(false);
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                  processLocationUploadFile(e.dataTransfer.files[0]);
+                }
+              }}
+              onClick={() => !isUploadingLocationFile && locationFileInputRef.current?.click()}
+              className={`rounded-2xl border-2 border-dashed p-5 text-center transition flex flex-col sm:flex-row items-center justify-between gap-3 cursor-pointer ${
+                locationDragActive
+                  ? 'border-teal-400 bg-teal-500/10'
+                  : 'border-slate-700/80 bg-slate-950/70 hover:border-teal-500/50 hover:bg-slate-950'
+              }`}
+            >
+              <input
+                ref={locationFileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv,.txt"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    processLocationUploadFile(e.target.files[0]);
+                  }
+                }}
+                className="hidden"
+              />
+              <div className="flex items-center gap-3 text-left">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-600/20 text-teal-400 border border-teal-500/30">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xs sm:text-sm font-bold text-white">
+                    {isUploadingLocationFile
+                      ? `Uploading "${locationUploadFileName}"...`
+                      : locationUploadFileName
+                      ? `Last uploaded: ${locationUploadFileName} (drop another to upload)`
+                      : 'Drop Excel, CSV, or TXT location list here'}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Supports headered tables (<span className="text-slate-200">Location Name, Zone, Code, Store ID</span>) or plain 1-column lists
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isUploadingLocationFile}
+                className="w-full sm:w-auto min-h-[44px] px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-xs font-bold text-white shadow-md active:scale-95 transition shrink-0 disabled:opacity-50"
+              >
+                {isUploadingLocationFile ? 'Uploading...' : 'Select & Auto-Upload'}
+              </button>
+            </div>
+          </div>
+
+          {/* Admin Create / Paste Location Tag(s) Form */}
+          <form
+            onSubmit={handleCreateAdminLocationTags}
+            className="rounded-2xl bg-slate-900 border border-slate-800 p-4 space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <Plus className="w-4 h-4 text-teal-400" />
+                <span>Or Type / Paste Location Tag(s)</span>
+              </h4>
+              <span className="text-[11px] text-slate-400">
+                Uses Target Store &amp; Zone above · Separate multiple names with commas or new lines
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Location Tag Name(s) <span className="text-teal-400">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={newLocationNames}
+                  onChange={(e) => setNewLocationNames(e.target.value)}
+                  placeholder="e.g. Aisle 1 - Shelf A, Aisle 1 - Shelf B, Backroom Rack 1"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:border-teal-400 focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Barcode Tag Code (Optional, Single)
+                </label>
+                <input
+                  type="text"
+                  value={newLocationCode}
+                  onChange={(e) => setNewLocationCode(e.target.value)}
+                  placeholder="e.g. LOC-A1-SA"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 min-h-[44px] text-xs font-mono text-white placeholder-slate-500 focus:border-teal-400 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={isSubmittingLocationTag || !newLocationNames.trim()}
+                className="min-h-[44px] px-4 rounded-xl bg-teal-600 hover:bg-teal-500 text-xs font-bold text-white shadow-md active:scale-95 transition disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>
+                  {isSubmittingLocationTag
+                    ? 'Saving Location Tags...'
+                    : 'Save & Publish Location Tag(s)'}
+                </span>
+              </button>
+            </div>
+          </form>
+
+          {/* Directory & Filter Bar */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-3.5 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={locationSearchQuery}
+                  onChange={(e) => setLocationSearchQuery(e.target.value)}
+                  placeholder="Search tag name, zone, code..."
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 pl-9 min-h-[44px] text-xs text-white placeholder-slate-500 focus:border-teal-400 focus:outline-none"
+                />
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3.5" />
+              </div>
+
+              <select
+                value={locationFilterStoreId}
+                onChange={(e) => setLocationFilterStoreId(e.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 min-h-[44px] text-xs text-white focus:border-teal-400 focus:outline-none"
+              >
+                <option value="all">All Retail Stores</option>
+                {stores.map((s) => (
+                  <option key={s.storeId} value={s.storeId}>
+                    {s.name} ({s.storeId})
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={locationFilterStatus}
+                onChange={(e) => setLocationFilterStatus(e.target.value as any)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 min-h-[44px] text-xs text-white focus:border-teal-400 focus:outline-none"
+              >
+                <option value="all">All Statuses</option>
+                <option value="approved">Approved (Clickable)</option>
+                <option value="pending_approval">Pending Approval</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+
+            {filteredLocationTags.length === 0 ? (
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-6 text-center space-y-1">
+                <MapPin className="w-7 h-7 text-slate-600 mx-auto" />
+                <p className="text-xs font-bold text-slate-300">No location tags found</p>
+                <p className="text-[11px] text-slate-500">
+                  Add standardized shelf/bin tags above so counters and supervisors can tap to select them.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {filteredLocationTags.map((tag) => (
+                  <div
+                    key={tag.id}
+                    className="rounded-xl bg-slate-950 border border-slate-800 p-3 flex items-start justify-between gap-2"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-mono text-xs font-bold text-white truncate">
+                          {tag.name}
+                        </span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[9px] font-black uppercase border ${
+                            tag.status === 'approved'
+                              ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+                              : tag.status === 'pending_approval'
+                              ? 'bg-amber-500/20 border-amber-500/30 text-amber-300'
+                              : 'bg-rose-500/20 border-rose-500/30 text-rose-300'
+                          }`}
+                        >
+                          {tag.status === 'approved'
+                            ? 'Approved'
+                            : tag.status === 'pending_approval'
+                            ? 'Pending'
+                            : 'Rejected'}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 truncate">
+                        {[
+                          `${tag.storeName} (${tag.storeId})`,
+                          tag.zone ? `Zone: ${tag.zone}` : null,
+                          tag.code && tag.code !== tag.name ? `Code: ${tag.code}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        By {tag.createdByName}
+                        {tag.approvedByName && tag.createdByRole !== 'admin'
+                          ? ` · Reviewed by ${tag.approvedByName}`
+                          : ''}
+                      </div>
+                      {tag.rejectionReason && (
+                        <div className="text-[10px] text-rose-300">
+                          Reason: {tag.rejectionReason}
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteLocationTag(tag)}
+                      disabled={reviewingTagId === tag.id}
+                      className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition shrink-0"
+                      title="Delete location tag"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 5: MANAGE USERS & STORE ASSIGNMENTS (ADMIN ONLY) */}
       {/* ========================================================================= */}
       {activeTab === 'manage_users' && (
         <div className="space-y-4 animate-in fade-in duration-150">

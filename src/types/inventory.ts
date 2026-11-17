@@ -1,5 +1,33 @@
 export type ItemCondition = 'Good' | 'Damage';
 export type CountRecordStatus = 'active' | 'voided';
+export type CountType = 'cycle' | 'annual';
+export type CountingSessionStatus = 'active' | 'closed';
+
+export interface CountingSession {
+  id: string;
+  countType: CountType;
+  title: string;
+  cutoffDate: string; // YYYY-MM-DD
+  storeId: string; // Specific storeId or 'ALL'
+  storeName: string;
+  status: CountingSessionStatus;
+  createdById: string;
+  createdByName: string;
+  createdByRole: UserRole;
+  createdAt: number;
+  createdDate: string;
+  createdTime: string;
+  closedAt?: number;
+  closedById?: string;
+  closedByName?: string;
+  closedByRole?: UserRole;
+  reopenedAt?: number;
+  reopenedById?: string;
+  reopenedByName?: string;
+  reopenedByRole?: UserRole;
+  notes?: string;
+  isDefaultBaseline?: boolean;
+}
 
 export interface InventoryCount {
   id: string;
@@ -29,6 +57,11 @@ export interface InventoryCount {
   voidedAt?: number;
   voidedBy?: string;
   voidReason?: string;
+  countRound?: 1 | 2;
+  recountTaskId?: string;
+  countType?: CountType;
+  sessionId?: string;
+  cutoffDate?: string;
 }
 
 export type CorrectionRequestType = 'correction' | 'void';
@@ -75,6 +108,9 @@ export interface CorrectionRequest {
   reviewedTime?: string;
   rejectionReason?: string;
   syncStatus?: 'synced' | 'pending';
+  countType?: CountType;
+  sessionId?: string;
+  cutoffDate?: string;
 }
 
 export type AuditActionType =
@@ -91,7 +127,21 @@ export type AuditActionType =
   | 'COUNTS_PURGED'
   | 'LOCATION_DONE_SUBMITTED'
   | 'LOCATION_VERIFIED'
-  | 'LOCATION_RECOUNT_FLAGGED';
+  | 'LOCATION_RECOUNT_FLAGGED'
+  | 'RECOUNT_TASK_OPENED'
+  | 'RECOUNT_COUNTER_ASSIGNED'
+  | 'SECOND_COUNT_SUBMITTED'
+  | 'SECOND_COUNT_VERIFIED'
+  | 'SECOND_COUNT_REOPENED'
+  | 'LOCATION_TAG_CREATED'
+  | 'LOCATION_TAG_REQUESTED'
+  | 'LOCATION_TAG_APPROVED'
+  | 'LOCATION_TAG_REJECTED'
+  | 'COUNT_FINALIZED'
+  | 'COUNT_REOPENED'
+  | 'COUNT_SESSION_CREATED'
+  | 'COUNT_SESSION_CLOSED'
+  | 'COUNT_SESSION_REOPENED';
 
 export interface AuditLogEntry {
   id: string;
@@ -115,6 +165,9 @@ export interface AuditLogEntry {
   timestamp: number;
   date: string;
   time: string;
+  countType?: CountType;
+  sessionId?: string;
+  cutoffDate?: string;
 }
 
 export interface Product {
@@ -205,4 +258,108 @@ export interface LocationVerification {
   verifiedTime?: string;
   supervisorNotes?: string;
   doneCounting?: boolean;
+  countType?: CountType;
+  sessionId?: string;
+  cutoffDate?: string;
+}
+
+export type LocationRecountStatus = 'open' | 'pending_review' | 'verified';
+
+export interface VarianceSkuTarget {
+  sku: string;
+  barcode: string;
+  description: string;
+  unit: string;
+  systemStock: number;
+  firstCountQty: number;
+  variance: number;
+}
+
+export interface LocationRecountTask {
+  id: string;
+  storeId: string;
+  storeName: string;
+  location: string;
+  status: LocationRecountStatus;
+  varianceSkus: VarianceSkuTarget[];
+  excludedCounterIds: string[];
+  excludedCounterNames: string[];
+  openedById: string;
+  openedByName: string;
+  openedByRole: UserRole;
+  openedAt: number;
+  openedDate: string;
+  openedTime: string;
+  assignedCounterId?: string;
+  assignedCounterName?: string;
+  assignedCounterRole?: UserRole;
+  assignedById?: string;
+  assignedByName?: string;
+  assignedAt?: number;
+  submittedById?: string;
+  submittedByName?: string;
+  submittedByRole?: UserRole;
+  submittedAt?: number;
+  submittedDate?: string;
+  submittedTime?: string;
+  counterNotes?: string;
+  verifiedById?: string;
+  verifiedByName?: string;
+  verifiedByRole?: UserRole;
+  verifiedAt?: number;
+  verifiedDate?: string;
+  verifiedTime?: string;
+  supervisorNotes?: string;
+  countType?: CountType;
+  sessionId?: string;
+  cutoffDate?: string;
+}
+
+export type LocationTagStatus = 'approved' | 'pending_approval' | 'rejected';
+
+export interface LocationTag {
+  id: string;
+  storeId: string;
+  storeName: string;
+  name: string;
+  zone?: string;
+  code?: string;
+  status: LocationTagStatus;
+  createdById: string;
+  createdByName: string;
+  createdByRole: UserRole;
+  createdAt: number;
+  createdDate: string;
+  createdTime: string;
+  approvedById?: string;
+  approvedByName?: string;
+  approvedByRole?: UserRole;
+  approvedAt?: number;
+  approvedDate?: string;
+  approvedTime?: string;
+  rejectionReason?: string;
+  notes?: string;
+}
+
+export type StoreCountFinalizationStatus = 'counting' | 'finalized';
+
+export interface StoreCountFinalization {
+  id: string;
+  storeId: string;
+  storeName: string;
+  status: StoreCountFinalizationStatus;
+  finalizedById?: string;
+  finalizedByName?: string;
+  finalizedByRole?: UserRole;
+  finalizedAt?: number;
+  finalizedDate?: string;
+  finalizedTime?: string;
+  reopenedById?: string;
+  reopenedByName?: string;
+  reopenedByRole?: UserRole;
+  reopenedAt?: number;
+  notes?: string;
+  countType?: CountType;
+  sessionId?: string;
+  cutoffDate?: string;
 }

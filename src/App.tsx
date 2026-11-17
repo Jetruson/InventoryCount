@@ -15,7 +15,19 @@ import {
   CorrectionRequest,
   AuditLogEntry,
   LocationVerification,
+  LocationRecountTask,
+  LocationTag,
+  StoreCountFinalization,
+  CountingSession,
 } from './types/inventory';
+import {
+  clearStoredActiveCountingSession,
+  doesRecordBelongToSession,
+  getLocalCountingSessions,
+  getStoredActiveCountingSession,
+  setStoredActiveCountingSession,
+  subscribeToCountingSessions,
+} from './services/sessionService';
 import {
   getLocalStores,
   getStoredActiveStore,
@@ -40,7 +52,11 @@ import {
   seedCatalogIfEmpty,
 } from './services/catalogService';
 import { subscribeToLocationVerifications } from './services/locationVerificationService';
+import { subscribeToLocationRecounts } from './services/recountService';
+import { subscribeToLocationTags } from './services/locationTagService';
+import { subscribeToCountFinalizations } from './services/finalizationService';
 import { AuthScreen } from './components/AuthScreen';
+import { CountingSessionSelectPage } from './components/CountingSessionSelectPage';
 import { TopNav } from './components/TopNav';
 import { BottomNav, ActiveTab } from './components/BottomNav';
 import { CountScreen } from './components/CountScreen';
@@ -64,6 +80,14 @@ export default function App() {
   const [correctionRequests, setCorrectionRequests] = useState<CorrectionRequest[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [locationVerifications, setLocationVerifications] = useState<LocationVerification[]>([]);
+  const [locationRecounts, setLocationRecounts] = useState<LocationRecountTask[]>([]);
+  const [locationTags, setLocationTags] = useState<LocationTag[]>([]);
+  const [countFinalizations, setCountFinalizations] = useState<StoreCountFinalization[]>([]);
+  const [countingSessions, setCountingSessions] = useState<CountingSession[]>(() =>
+    getLocalCountingSessions()
+  );
+  const [activeCountingSession, setActiveCountingSession] = useState<CountingSession | null>(null);
+  const [isSelectingSession, setIsSelectingSession] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('count');
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [isDeployGuideOpen, setIsDeployGuideOpen] = useState<boolean>(false);
@@ -130,6 +154,12 @@ export default function App() {
         };
 
         setCurrentUser(userObj);
+        if (userObj.role !== 'admin') {
+          const restored = getStoredActiveCountingSession(userObj.uid);
+          if (restored) {
+            setActiveCountingSession(restored);
+          }
+        }
 
         if (
           (resolvedRole === 'counter' || resolvedRole === 'supervisor') &&
@@ -150,6 +180,12 @@ export default function App() {
           if (activeSession) {
             const parsed: AppUser = JSON.parse(activeSession);
             setCurrentUser(parsed);
+            if (parsed.role !== 'admin') {
+              const restored = getStoredActiveCountingSession(parsed.uid);
+              if (restored) {
+                setActiveCountingSession(restored);
+              }
+            }
             if (
               (parsed.role === 'counter' || parsed.role === 'supervisor') &&
               parsed.assignedStoreId &&
@@ -271,6 +307,22 @@ export default function App() {
           })
         : () => {};
 
+    const unsubLocationRecounts = subscribeToLocationRecounts((liveRecounts) => {
+      setLocationRecounts(liveRecounts);
+    });
+
+    const unsubLocationTags = subscribeToLocationTags((liveTags) => {
+      setLocationTags(liveTags);
+    });
+
+    const unsubCountFinalizations = subscribeToCountFinalizations((liveFinalizations) => {
+      setCountFinalizations(liveFinalizations);
+    });
+
+    const unsubCountingSessions = subscribeToCountingSessions((liveSessions) => {
+      setCountingSessions(liveSessions);
+    });
+
     const unsubSync = subscribeToSyncStatus((status) => {
       setPendingSyncCount(status.pendingCount);
     });
@@ -281,23 +333,93 @@ export default function App() {
       unsubRequests();
       unsubAuditLogs();
       unsubLocationVerifications();
+      unsubLocationRecounts();
+      unsubLocationTags();
+      unsubCountFinalizations();
+      unsubCountingSessions();
       unsubSync();
     };
   }, [userId, userRole]);
+
+  // Keep active counting session synced with live status updates (Active vs Closed)
+  const resolvedActiveSession = useMemo(() => {
+    if (!activeCountingSession) return null;
+    return (
+      countingSessions.find((s) => s.id === activeCountingSession.id) ||
+      activeCountingSession
+    );
+  }, [countingSessions, activeCountingSession]);
+
+  // Session-isolated datasets for Cycle Count vs Annual Inventory Count
+  const sessionCounts = useMemo(
+    () =>
+      resolvedActiveSession
+        ? counts.filter((c) => doesRecordBelongToSession(c, resolvedActiveSession))
+        : counts,
+    [counts, resolvedActiveSession]
+  );
+
+  const sessionCorrectionRequests = useMemo(
+    () =>
+      resolvedActiveSession
+        ? correctionRequests.filter((r) => doesRecordBelongToSession(r, resolvedActiveSession))
+        : correctionRequests,
+    [correctionRequests, resolvedActiveSession]
+  );
+
+  const sessionLocationVerifications = useMemo(
+    () =>
+      resolvedActiveSession
+        ? locationVerifications.filter((v) => doesRecordBelongToSession(v, resolvedActiveSession))
+        : locationVerifications,
+    [locationVerifications, resolvedActiveSession]
+  );
+
+  const sessionLocationRecounts = useMemo(
+    () =>
+      resolvedActiveSession
+        ? locationRecounts.filter((r) => doesRecordBelongToSession(r, resolvedActiveSession))
+        : locationRecounts,
+    [locationRecounts, resolvedActiveSession]
+  );
+
+  const sessionCountFinalizations = useMemo(
+    () =>
+      resolvedActiveSession
+        ? countFinalizations.filter((f) => doesRecordBelongToSession(f, resolvedActiveSession))
+        : countFinalizations,
+    [countFinalizations, resolvedActiveSession]
+  );
+
+  const sessionAuditLogs = useMemo(
+    () =>
+      resolvedActiveSession
+        ? auditLogs.filter((l) => doesRecordBelongToSession(l, resolvedActiveSession))
+        : auditLogs,
+    [auditLogs, resolvedActiveSession]
+  );
 
   const pendingLocationVerificationsCount = useMemo(() => {
     if (!currentUser) return 0;
     const role = currentUser.role;
     if (role !== 'supervisor' && role !== 'ops_supervisor') return 0;
     const assignedStoreId = currentUser.assignedStoreId || currentUser.activeStoreId;
-    return locationVerifications.filter((v) => {
+    const pendingVerifs = sessionLocationVerifications.filter((v) => {
       if (v.status !== 'pending_verification') return false;
       if (role === 'supervisor' && assignedStoreId && assignedStoreId !== 'ALL') {
         return v.storeId === assignedStoreId;
       }
       return true;
     }).length;
-  }, [locationVerifications, currentUser]);
+    const pendingRecountReviews = sessionLocationRecounts.filter((r) => {
+      if (r.status !== 'pending_review') return false;
+      if (role === 'supervisor' && assignedStoreId && assignedStoreId !== 'ALL') {
+        return r.storeId === assignedStoreId;
+      }
+      return true;
+    }).length;
+    return pendingVerifs + pendingRecountReviews;
+  }, [sessionLocationVerifications, sessionLocationRecounts, currentUser]);
 
   const pendingRequestsCount = useMemo(() => {
     if (!currentUser) return 0;
@@ -306,7 +428,7 @@ export default function App() {
     const isStoreLockedAudit =
       role === 'audit' && Boolean(assignedStoreId && assignedStoreId !== 'ALL');
 
-    return correctionRequests.filter((r) => {
+    return sessionCorrectionRequests.filter((r) => {
       if (r.status !== 'pending') return false;
       const bySupervisor =
         r.requestedByRole === 'supervisor' || r.requestedByRole === 'ops_supervisor';
@@ -331,7 +453,7 @@ export default function App() {
 
       return false;
     }).length;
-  }, [correctionRequests, currentUser]);
+  }, [sessionCorrectionRequests, currentUser]);
 
   const handleSelectStore = (store: Store) => {
     const canSwitchStore =
@@ -347,12 +469,34 @@ export default function App() {
     setStoredActiveStore(store);
   };
 
+  const handleSelectCountingSession = (session: CountingSession) => {
+    setActiveCountingSession(session);
+    setStoredActiveCountingSession(session, currentUser?.uid);
+    setIsSelectingSession(false);
+
+    if (session.storeId && session.storeId !== 'ALL') {
+      const matched = stores.find((s) => s.storeId === session.storeId);
+      const canSwitchStore =
+        currentUser?.role === 'ops_counter' ||
+        currentUser?.role === 'ops_supervisor' ||
+        (currentUser?.role === 'audit' &&
+          (!currentUser.assignedStoreId || currentUser.assignedStoreId === 'ALL'));
+      if (matched && canSwitchStore) {
+        setActiveStore(matched);
+        setStoredActiveStore(matched);
+      }
+    }
+  };
+
   const handleLogout = async () => {
     try {
       sessionStorage.removeItem('inventory_count_session_user');
       localStorage.removeItem('inventory_count_session_user');
+      clearStoredActiveCountingSession();
       await signOut(auth);
       setCurrentUser(null);
+      setActiveCountingSession(null);
+      setIsSelectingSession(false);
       setActiveTab('count');
     } catch (err) {
       console.error('Logout error:', err);
@@ -386,6 +530,9 @@ export default function App() {
       <AuthScreen
         stores={stores}
         onLoginSuccess={(user, selectedStore) => {
+          clearStoredActiveCountingSession();
+          setActiveCountingSession(null);
+          setIsSelectingSession(false);
           setCurrentUser(user);
           setActiveStore(selectedStore);
           setStoredActiveStore(selectedStore);
@@ -401,6 +548,26 @@ export default function App() {
     );
   }
 
+  // Post-login session gate for all non-admin roles: select Cycle Count or Annual Inventory Count first
+  if (currentUser.role !== 'admin' && (!resolvedActiveSession || isSelectingSession)) {
+    return (
+      <CountingSessionSelectPage
+        currentUser={currentUser}
+        stores={stores}
+        activeStore={activeStore}
+        countingSessions={countingSessions}
+        counts={counts}
+        activeSession={resolvedActiveSession}
+        onSelectSession={handleSelectCountingSession}
+        onSelectStore={handleSelectStore}
+        onLogout={handleLogout}
+        onCancelSwitch={
+          resolvedActiveSession ? () => setIsSelectingSession(false) : undefined
+        }
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased selection:bg-emerald-500 selection:text-white">
       {/* Offline Status Toast */}
@@ -411,6 +578,10 @@ export default function App() {
         user={currentUser}
         activeStore={activeStore}
         stores={stores}
+        activeSession={resolvedActiveSession}
+        countingSessions={countingSessions}
+        onSelectSession={handleSelectCountingSession}
+        onOpenSessionSelector={() => setIsSelectingSession(true)}
         onSelectStore={handleSelectStore}
         onLogout={handleLogout}
       />
@@ -422,19 +593,24 @@ export default function App() {
             currentUser={currentUser}
             activeStore={activeStore}
             catalog={catalog}
-            counts={counts}
-            locationVerifications={locationVerifications}
+            counts={sessionCounts}
+            locationVerifications={sessionLocationVerifications}
+            locationRecounts={sessionLocationRecounts}
+            locationTags={locationTags}
+            countFinalizations={sessionCountFinalizations}
+            activeSession={resolvedActiveSession}
             onCountSaved={handleCountSaved}
           />
         )}
 
         {activeTab === 'history' && currentUser.role !== 'admin' && (
           <HistoryScreen
-            counts={counts}
+            counts={sessionCounts}
             activeStore={activeStore}
             currentUser={currentUser}
-            correctionRequests={correctionRequests}
-            locationVerifications={locationVerifications}
+            correctionRequests={sessionCorrectionRequests}
+            locationVerifications={sessionLocationVerifications}
+            activeSession={resolvedActiveSession}
           />
         )}
 
@@ -443,29 +619,37 @@ export default function App() {
             currentUser.role === 'supervisor' ||
             currentUser.role === 'ops_supervisor') && (
             <CorrectionRequestsScreen
-              requests={correctionRequests}
+              requests={sessionCorrectionRequests}
               stores={stores}
               currentUser={currentUser}
+              activeSession={resolvedActiveSession}
             />
           )}
 
         {activeTab === 'supervisor' &&
           (currentUser.role === 'supervisor' || currentUser.role === 'ops_supervisor') && (
             <SupervisorScreen
-              counts={counts}
+              counts={sessionCounts}
               stores={stores}
+              catalog={catalog}
               currentUser={currentUser}
-              locationVerifications={locationVerifications}
+              locationVerifications={sessionLocationVerifications}
+              locationRecounts={sessionLocationRecounts}
+              locationTags={locationTags}
+              correctionRequests={sessionCorrectionRequests}
+              countFinalizations={sessionCountFinalizations}
+              activeSession={resolvedActiveSession}
             />
           )}
 
         {activeTab === 'audit_trail' && currentUser.role === 'audit' && (
           <AuditTrailScreen
-            auditLogs={auditLogs}
-            counts={counts}
-            correctionRequests={correctionRequests}
+            auditLogs={sessionAuditLogs}
+            counts={sessionCounts}
+            correctionRequests={sessionCorrectionRequests}
             stores={stores}
             currentUser={currentUser}
+            activeSession={resolvedActiveSession}
           />
         )}
 
@@ -475,6 +659,12 @@ export default function App() {
             counts={counts}
             stores={stores}
             catalog={catalog}
+            locationRecounts={locationRecounts}
+            locationTags={locationTags}
+            locationVerifications={locationVerifications}
+            correctionRequests={correctionRequests}
+            countFinalizations={countFinalizations}
+            countingSessions={countingSessions}
             onCatalogUpdated={() => setCatalog(getLocalCatalog())}
             onStoresUpdated={(updatedStores) => {
               setStores(updatedStores);

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   CorrectionRequest,
+  CountingSession,
   Store,
   AppUser,
 } from '../types/inventory';
@@ -8,6 +9,7 @@ import {
   approveCorrectionOrVoidRequest,
   rejectCorrectionOrVoidRequest,
 } from '../services/auditService';
+import { getCountTypeLabel } from '../services/sessionService';
 import {
   ClipboardCheck,
   CheckCircle2,
@@ -28,13 +30,16 @@ interface CorrectionRequestsScreenProps {
   requests: CorrectionRequest[];
   stores: Store[];
   currentUser: AppUser;
+  activeSession?: CountingSession | null;
 }
 
 export const CorrectionRequestsScreen: React.FC<CorrectionRequestsScreenProps> = ({
   requests,
   stores,
   currentUser,
+  activeSession,
 }) => {
+  const isSessionClosed = activeSession?.status === 'closed';
   const isAuditUser = currentUser.role === 'audit';
   const isStoreSupervisor = currentUser.role === 'supervisor';
   const isStoreLockedAudit =
@@ -222,6 +227,23 @@ export const CorrectionRequestsScreen: React.FC<CorrectionRequestsScreenProps> =
               ? `Scoped strictly to ${assignedStore.name} (${assignedStore.storeId}) Store Counters · Your own requests require Audit approval`
               : 'Scoped to your assigned store counters'}
           </p>
+          {activeSession && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300">
+              <span
+                className={`font-bold ${
+                  activeSession.countType === 'cycle' ? 'text-cyan-300' : 'text-emerald-300'
+                }`}
+              >
+                {getCountTypeLabel(activeSession.countType)}
+              </span>
+              <span className="text-slate-600" aria-hidden="true">·</span>
+              <span className="font-semibold text-white">{activeSession.title}</span>
+              <span className="text-slate-600" aria-hidden="true">·</span>
+              <span className="font-mono tabular-nums text-slate-400">
+                Cut-Off {activeSession.cutoffDate || '—'}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -235,6 +257,15 @@ export const CorrectionRequestsScreen: React.FC<CorrectionRequestsScreenProps> =
           </div>
         </div>
       </div>
+
+      {isSessionClosed && (
+        <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-200 flex items-center gap-2">
+          <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>
+            This counting session is closed and finalized. Pending correction or void requests cannot be approved or modified unless an Administrator re-opens the session.
+          </span>
+        </div>
+      )}
 
       {/* Feedback Banner */}
       {actionMessage && (
@@ -539,6 +570,11 @@ export const CorrectionRequestsScreen: React.FC<CorrectionRequestsScreenProps> =
                         ? 'Ops Supervisor Approval Required — multi-store counter requests must be reviewed by the Operations Counter Supervisor.'
                         : 'Store Supervisor Approval Required — store counter requests must be reviewed by the Store Supervisor of that same store.'}
                     </span>
+                  </div>
+                ) : isSessionClosed ? (
+                  <div className="rounded-xl bg-slate-950 border border-amber-500/30 p-2.5 flex items-center gap-2 text-xs text-amber-300 font-medium">
+                    <Lock className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>Session Closed — approvals are locked for finalized sessions.</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2.5 pt-1 border-t border-slate-800">

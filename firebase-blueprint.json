@@ -87,6 +87,27 @@
         "voidReason": {
           "type": "string",
           "description": "Supervisor-approved reason for voiding the count"
+        },
+        "countRound": {
+          "type": "number",
+          "description": "Count round (1 for initial count, 2 for variance second count)"
+        },
+        "recountTaskId": {
+          "type": "string",
+          "description": "Reference to LocationRecountTask ID for second counts"
+        },
+        "countType": {
+          "type": "string",
+          "enum": ["cycle", "annual"],
+          "description": "Counting mode: cycle (Cycle Count) or annual (Annual Inventory Count)"
+        },
+        "sessionId": {
+          "type": "string",
+          "description": "Counting session identifier isolating Cycle Count vs Annual Inventory Count data"
+        },
+        "cutoffDate": {
+          "type": "string",
+          "description": "Cut-off date for the counting session (YYYY-MM-DD)"
         }
       },
       "required": ["username", "userId", "store", "sku", "countedQuantity", "date", "time"]
@@ -262,7 +283,7 @@
         "newValue": { "type": "string", "description": "After-change snapshot summary" },
         "action": {
           "type": "string",
-          "enum": ["COUNT_SUBMITTED", "CORRECTION_REQUESTED", "VOID_REQUESTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "QUANTITY_CHANGED", "LOCATION_CHANGED", "ITEM_DETAILS_CHANGED", "RECORD_VOIDED", "VOID_REJECTED", "COUNTS_PURGED", "LOCATION_DONE_SUBMITTED", "LOCATION_VERIFIED", "LOCATION_RECOUNT_FLAGGED"],
+          "enum": ["COUNT_SUBMITTED", "CORRECTION_REQUESTED", "VOID_REQUESTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "QUANTITY_CHANGED", "LOCATION_CHANGED", "ITEM_DETAILS_CHANGED", "RECORD_VOIDED", "VOID_REJECTED", "COUNTS_PURGED", "LOCATION_DONE_SUBMITTED", "LOCATION_VERIFIED", "LOCATION_RECOUNT_FLAGGED", "RECOUNT_TASK_OPENED", "RECOUNT_COUNTER_ASSIGNED", "SECOND_COUNT_SUBMITTED", "SECOND_COUNT_VERIFIED", "SECOND_COUNT_REOPENED", "LOCATION_TAG_CREATED", "LOCATION_TAG_REQUESTED", "LOCATION_TAG_APPROVED", "LOCATION_TAG_REJECTED", "COUNT_FINALIZED", "COUNT_REOPENED", "COUNT_SESSION_CREATED", "COUNT_SESSION_CLOSED", "COUNT_SESSION_REOPENED"],
           "description": "Action performed"
         },
         "approvalStatus": { "type": "string", "enum": ["N/A", "Pending", "Approved", "Rejected"] },
@@ -272,7 +293,10 @@
         "reviewedBy": { "type": "string", "description": "Supervisor who approved or rejected" },
         "timestamp": { "type": "number", "description": "System-generated timestamp" },
         "date": { "type": "string", "description": "YYYY-MM-DD" },
-        "time": { "type": "string", "description": "HH:mm:ss" }
+        "time": { "type": "string", "description": "HH:mm:ss" },
+        "countType": { "type": "string", "enum": ["cycle", "annual"] },
+        "sessionId": { "type": "string" },
+        "cutoffDate": { "type": "string" }
       },
       "required": ["id", "inventoryCountId", "sku", "itemDescription", "originalValue", "newValue", "action", "reason", "requestedBy", "requestedById", "timestamp", "date", "time"]
     },
@@ -296,6 +320,105 @@
         "supervisorNotes": { "type": "string", "description": "Verification or recount notes" }
       },
       "required": ["id", "storeId", "storeName", "location", "status", "submittedById", "submittedByName", "submittedAt"]
+    },
+    "LocationRecountTask": {
+      "title": "LocationRecountTask",
+      "description": "Per-location second count (variance recount) task with excluded first-round counters",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Deterministic store+location recount task ID" },
+        "storeId": { "type": "string", "description": "Store identifier" },
+        "storeName": { "type": "string", "description": "Store name" },
+        "location": { "type": "string", "description": "Physical shelf/aisle/bin location" },
+        "status": { "type": "string", "enum": ["open", "pending_review", "verified"], "description": "Second count lifecycle status" },
+        "excludedCounterIds": { "type": "array", "description": "User IDs of Round 1 counters excluded from recounting this location" },
+        "excludedCounterNames": { "type": "array", "description": "Display names of Round 1 counters excluded from recounting this location" },
+        "openedById": { "type": "string", "description": "Supervisor/Admin UID who opened the recount" },
+        "openedByName": { "type": "string", "description": "Supervisor/Admin name" },
+        "openedAt": { "type": "number", "description": "Timestamp when recount was opened" },
+        "assignedCounterId": { "type": "string", "description": "Optional assigned Round 2 counter UID chosen by Supervisor Ops" },
+        "assignedCounterName": { "type": "string", "description": "Optional assigned Round 2 counter display name" },
+        "assignedCounterRole": { "type": "string", "description": "Optional assigned Round 2 counter role" },
+        "assignedById": { "type": "string", "description": "Supervisor Ops UID who assigned the counter" },
+        "assignedByName": { "type": "string", "description": "Supervisor Ops name who assigned the counter" },
+        "assignedAt": { "type": "number", "description": "Timestamp when counter was assigned" },
+        "submittedById": { "type": "string", "description": "Eligible Round 2 counter UID" },
+        "submittedByName": { "type": "string", "description": "Eligible Round 2 counter name" },
+        "verifiedById": { "type": "string", "description": "Supervisor UID verifying Round 2 count" },
+        "verifiedByName": { "type": "string", "description": "Supervisor name" },
+        "supervisorNotes": { "type": "string", "description": "Notes on recount verification or reopening" }
+      },
+      "required": ["id", "storeId", "storeName", "location", "status", "excludedCounterIds", "openedById", "openedByName", "openedAt"]
+    },
+    "LocationTag": {
+      "title": "LocationTag",
+      "description": "Standardized clickable location tag created by Admin or requested by Supervisor pending Admin approval",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Deterministic store+name location tag ID" },
+        "storeId": { "type": "string", "description": "Store identifier" },
+        "storeName": { "type": "string", "description": "Store name" },
+        "name": { "type": "string", "description": "Display location tag name (e.g., Aisle 1 - Shelf A)" },
+        "zone": { "type": "string", "description": "Optional department or floor zone" },
+        "code": { "type": "string", "description": "Optional barcode or location tag code" },
+        "status": { "type": "string", "enum": ["approved", "pending_approval", "rejected"], "description": "Approval state of location tag" },
+        "createdById": { "type": "string", "description": "Creator or requester UID" },
+        "createdByName": { "type": "string", "description": "Creator or requester name" },
+        "createdByRole": { "type": "string", "enum": ["counter", "ops_counter", "supervisor", "ops_supervisor", "audit", "admin"] },
+        "createdAt": { "type": "number", "description": "Creation/request timestamp" },
+        "approvedById": { "type": "string", "description": "Admin UID who approved or rejected" },
+        "approvedByName": { "type": "string", "description": "Admin name" },
+        "rejectionReason": { "type": "string", "description": "Reason provided when rejecting a supervisor location request" },
+        "notes": { "type": "string", "description": "Optional supervisor request notes" }
+      },
+      "required": ["id", "storeId", "storeName", "name", "status", "createdById", "createdByName", "createdByRole", "createdAt"]
+    },
+    "StoreCountFinalization": {
+      "title": "StoreCountFinalization",
+      "description": "Tracks whether a retail store's counting (Round 1 + Round 2 recounts) is finalized so Supervisors can unlock System Balance review",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Deterministic store finalization ID" },
+        "storeId": { "type": "string", "description": "Store identifier" },
+        "storeName": { "type": "string", "description": "Store name" },
+        "status": { "type": "string", "enum": ["counting", "finalized"], "description": "Counting session status" },
+        "finalizedById": { "type": "string", "description": "UID of supervisor or admin who finalized counting" },
+        "finalizedByName": { "type": "string", "description": "Display name of user who finalized counting" },
+        "finalizedByRole": { "type": "string", "enum": ["supervisor", "ops_supervisor", "admin"] },
+        "finalizedAt": { "type": "number", "description": "Timestamp when counting was finalized" },
+        "reopenedById": { "type": "string", "description": "Admin UID if counting was reopened" },
+        "reopenedByName": { "type": "string", "description": "Admin display name if reopened" },
+        "reopenedByRole": { "type": "string", "enum": ["admin"] },
+        "reopenedAt": { "type": "number", "description": "Timestamp when counting was reopened" },
+        "notes": { "type": "string", "description": "Optional notes" },
+        "countType": { "type": "string", "enum": ["cycle", "annual"] },
+        "sessionId": { "type": "string" },
+        "cutoffDate": { "type": "string" }
+      },
+      "required": ["id", "storeId", "storeName", "status"]
+    },
+    "CountingSession": {
+      "title": "CountingSession",
+      "description": "Cycle Count or Annual Inventory Count session with cut-off date and open/closed lifecycle",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Counting session ID" },
+        "countType": { "type": "string", "enum": ["cycle", "annual"], "description": "Cycle Count or Annual Inventory Count" },
+        "title": { "type": "string", "description": "Session display title" },
+        "cutoffDate": { "type": "string", "description": "Official cut-off date (YYYY-MM-DD)" },
+        "storeId": { "type": "string", "description": "Assigned storeId or ALL" },
+        "storeName": { "type": "string", "description": "Store scope label" },
+        "status": { "type": "string", "enum": ["active", "closed"], "description": "Session status" },
+        "createdById": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "createdByRole": { "type": "string", "enum": ["admin", "supervisor", "ops_supervisor"] },
+        "createdAt": { "type": "number" },
+        "closedAt": { "type": "number" },
+        "closedById": { "type": "string" },
+        "closedByName": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "countType", "title", "cutoffDate", "storeId", "storeName", "status", "createdById", "createdByName", "createdByRole", "createdAt"]
     }
   },
   "firestore": {
@@ -346,6 +469,30 @@
         "$ref": "#/entities/LocationVerification"
       },
       "description": "Per-location count verification records submitted by counters and checked by supervisors"
+    },
+    "/location_recounts/{recountId}": {
+      "schema": {
+        "$ref": "#/entities/LocationRecountTask"
+      },
+      "description": "Per-location second count variance recount tasks with segregation of duties"
+    },
+    "/location_tags/{tagId}": {
+      "schema": {
+        "$ref": "#/entities/LocationTag"
+      },
+      "description": "Admin-defined and supervisor-requested clickable location tags per store"
+    },
+    "/count_finalizations/{finalizationId}": {
+      "schema": {
+        "$ref": "#/entities/StoreCountFinalization"
+      },
+      "description": "Per-store counting finalization status governing when supervisors can view system balance"
+    },
+    "/counting_sessions/{sessionId}": {
+      "schema": {
+        "$ref": "#/entities/CountingSession"
+      },
+      "description": "Cycle Count and Annual Inventory Count sessions with cut-off dates and close/finalization status"
     }
   }
 }

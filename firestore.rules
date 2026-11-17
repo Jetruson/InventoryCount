@@ -20,6 +20,10 @@ service cloud.firestore {
              (!('condition' in data) || data.condition in ['Good', 'Damage']) &&
              (!('status' in data) || data.status in ['active', 'voided']) &&
              (!('version' in data) || (data.version is number && data.version >= 1)) &&
+             (!('countRound' in data) || data.countRound in [1, 2]) &&
+             (!('countType' in data) || data.countType in ['cycle', 'annual']) &&
+             (!('sessionId' in data) || (data.sessionId is string && data.sessionId.size() <= 128)) &&
+             (!('cutoffDate' in data) || (data.cutoffDate is string && data.cutoffDate.size() <= 32)) &&
              data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
              data.username is string && data.username.size() > 0 && data.username.size() <= 120 &&
              data.store is string && data.store.size() > 0 && data.store.size() <= 120;
@@ -33,6 +37,8 @@ service cloud.firestore {
              data.targetVersion is number && data.targetVersion >= 1 &&
              data.reason is string && data.reason.size() > 0 && data.reason.size() <= 1000 &&
              data.status in ['pending', 'approved', 'rejected'] &&
+             (!('countType' in data) || data.countType in ['cycle', 'annual']) &&
+             (!('sessionId' in data) || (data.sessionId is string && data.sessionId.size() <= 128)) &&
              data.requestedById is string && data.requestedById.size() > 0 && data.requestedById.size() <= 128 &&
              data.requestedByUsername is string && data.requestedByUsername.size() > 0 && data.requestedByUsername.size() <= 120 &&
              data.requestedAt is number;
@@ -46,7 +52,9 @@ service cloud.firestore {
              data.itemDescription is string && data.itemDescription.size() <= 500 &&
              data.originalValue is string && data.originalValue.size() <= 1000 &&
              data.newValue is string && data.newValue.size() <= 1000 &&
-             data.action in ['COUNT_SUBMITTED', 'CORRECTION_REQUESTED', 'VOID_REQUESTED', 'CORRECTION_APPROVED', 'CORRECTION_REJECTED', 'QUANTITY_CHANGED', 'LOCATION_CHANGED', 'ITEM_DETAILS_CHANGED', 'RECORD_VOIDED', 'VOID_REJECTED', 'COUNTS_PURGED', 'LOCATION_DONE_SUBMITTED', 'LOCATION_VERIFIED', 'LOCATION_RECOUNT_FLAGGED'] &&
+             data.action in ['COUNT_SUBMITTED', 'CORRECTION_REQUESTED', 'VOID_REQUESTED', 'CORRECTION_APPROVED', 'CORRECTION_REJECTED', 'QUANTITY_CHANGED', 'LOCATION_CHANGED', 'ITEM_DETAILS_CHANGED', 'RECORD_VOIDED', 'VOID_REJECTED', 'COUNTS_PURGED', 'LOCATION_DONE_SUBMITTED', 'LOCATION_VERIFIED', 'LOCATION_RECOUNT_FLAGGED', 'RECOUNT_TASK_OPENED', 'RECOUNT_COUNTER_ASSIGNED', 'SECOND_COUNT_SUBMITTED', 'SECOND_COUNT_VERIFIED', 'SECOND_COUNT_REOPENED', 'LOCATION_TAG_CREATED', 'LOCATION_TAG_REQUESTED', 'LOCATION_TAG_APPROVED', 'LOCATION_TAG_REJECTED', 'COUNT_FINALIZED', 'COUNT_REOPENED', 'COUNT_SESSION_CREATED', 'COUNT_SESSION_CLOSED', 'COUNT_SESSION_REOPENED'] &&
+             (!('countType' in data) || data.countType in ['cycle', 'annual']) &&
+             (!('sessionId' in data) || (data.sessionId is string && data.sessionId.size() <= 128)) &&
              data.reason is string && data.reason.size() <= 1000 &&
              data.requestedBy is string && data.requestedBy.size() > 0 && data.requestedBy.size() <= 150 &&
              data.requestedById is string && data.requestedById.size() > 0 && data.requestedById.size() <= 128 &&
@@ -80,9 +88,67 @@ service cloud.firestore {
              data.storeName is string && data.storeName.size() > 0 && data.storeName.size() <= 150 &&
              data.location is string && data.location.size() > 0 && data.location.size() <= 150 &&
              data.status in ['pending_verification', 'verified', 'recount_needed'] &&
+             (!('countType' in data) || data.countType in ['cycle', 'annual']) &&
+             (!('sessionId' in data) || (data.sessionId is string && data.sessionId.size() <= 128)) &&
              data.submittedById is string && data.submittedById.size() > 0 && data.submittedById.size() <= 128 &&
              data.submittedByName is string && data.submittedByName.size() > 0 && data.submittedByName.size() <= 150 &&
              data.submittedAt is number;
+    }
+
+    function isValidLocationRecount(data) {
+      return data.keys().hasAll(['id', 'storeId', 'storeName', 'location', 'status', 'varianceSkus', 'excludedCounterIds', 'openedById', 'openedByName', 'openedAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.storeId is string && data.storeId.size() > 0 && data.storeId.size() <= 64 &&
+             data.storeName is string && data.storeName.size() > 0 && data.storeName.size() <= 150 &&
+             data.location is string && data.location.size() > 0 && data.location.size() <= 150 &&
+             data.status in ['open', 'pending_review', 'verified'] &&
+             (!('countType' in data) || data.countType in ['cycle', 'annual']) &&
+             (!('sessionId' in data) || (data.sessionId is string && data.sessionId.size() <= 128)) &&
+             data.varianceSkus is list && data.varianceSkus.size() > 0 && data.varianceSkus.size() <= 500 &&
+             data.excludedCounterIds is list && data.excludedCounterIds.size() <= 200 &&
+             data.openedById is string && data.openedById.size() > 0 && data.openedById.size() <= 128 &&
+             data.openedByName is string && data.openedByName.size() > 0 && data.openedByName.size() <= 150 &&
+             data.openedAt is number;
+    }
+
+    function isValidLocationTag(data) {
+      return data.keys().hasAll(['id', 'storeId', 'storeName', 'name', 'status', 'createdById', 'createdByName', 'createdByRole', 'createdAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.storeId is string && data.storeId.size() > 0 && data.storeId.size() <= 64 &&
+             data.storeName is string && data.storeName.size() > 0 && data.storeName.size() <= 150 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
+             data.status in ['approved', 'pending_approval', 'rejected'] &&
+             data.createdById is string && data.createdById.size() > 0 && data.createdById.size() <= 128 &&
+             data.createdByName is string && data.createdByName.size() > 0 && data.createdByName.size() <= 150 &&
+             data.createdByRole in ['counter', 'ops_counter', 'supervisor', 'ops_supervisor', 'audit', 'admin'] &&
+             data.createdAt is number;
+    }
+
+    function isValidCountFinalization(data) {
+      return data.keys().hasAll(['id', 'storeId', 'storeName', 'status']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.storeId is string && data.storeId.size() > 0 && data.storeId.size() <= 64 &&
+             data.storeName is string && data.storeName.size() > 0 && data.storeName.size() <= 150 &&
+             data.status in ['counting', 'finalized'] &&
+             (!('countType' in data) || data.countType in ['cycle', 'annual']) &&
+             (!('sessionId' in data) || (data.sessionId is string && data.sessionId.size() <= 128)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 500));
+    }
+
+    function isValidCountingSession(data) {
+      return data.keys().hasAll(['id', 'countType', 'title', 'cutoffDate', 'storeId', 'storeName', 'status', 'createdById', 'createdByName', 'createdByRole', 'createdAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.countType in ['cycle', 'annual'] &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 150 &&
+             data.cutoffDate is string && data.cutoffDate.size() >= 8 && data.cutoffDate.size() <= 32 &&
+             data.storeId is string && data.storeId.size() > 0 && data.storeId.size() <= 64 &&
+             data.storeName is string && data.storeName.size() > 0 && data.storeName.size() <= 150 &&
+             data.status in ['active', 'closed'] &&
+             data.createdById is string && data.createdById.size() > 0 && data.createdById.size() <= 128 &&
+             data.createdByName is string && data.createdByName.size() > 0 && data.createdByName.size() <= 150 &&
+             data.createdByRole in ['admin', 'supervisor', 'ops_supervisor'] &&
+             data.createdAt is number &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 500));
     }
 
     // Connection health check
@@ -186,6 +252,123 @@ service cloud.firestore {
                                  )
                                );
       allow delete: if isValidId(verificationId);
+    }
+
+    // Per-Location Second Count (Variance Recount) Tasks with Segregation of Duties & Optional Assignment
+    match /location_recounts/{recountId} {
+      allow read: if true;
+      allow create, update: if isValidId(recountId) &&
+                               isValidLocationRecount(request.resource.data) &&
+                               (!('assignedCounterId' in request.resource.data) || request.resource.data.assignedCounterId == '' || !(request.resource.data.assignedCounterId in request.resource.data.excludedCounterIds)) &&
+                               (
+                                 request.resource.data.status == 'open' ||
+                                 (
+                                   request.resource.data.status == 'pending_review' &&
+                                   request.resource.data.submittedById is string &&
+                                   request.resource.data.submittedById.size() > 0 &&
+                                   !(request.resource.data.submittedById in request.resource.data.excludedCounterIds) &&
+                                   (!('assignedCounterId' in request.resource.data) || request.resource.data.assignedCounterId == '' || request.resource.data.submittedById == request.resource.data.assignedCounterId)
+                                 ) ||
+                                 (
+                                   request.resource.data.status == 'verified' &&
+                                   request.resource.data.verifiedById is string &&
+                                   request.resource.data.verifiedById.size() > 0 &&
+                                   request.resource.data.verifiedByRole in ['supervisor', 'ops_supervisor', 'admin'] &&
+                                   (!('submittedById' in request.resource.data) || request.resource.data.verifiedById != request.resource.data.submittedById)
+                                 )
+                               );
+      allow delete: if isValidId(recountId);
+    }
+
+    // Location Tags (Created directly by Admin; Supervisors can submit pending requests requiring Admin approval)
+    match /location_tags/{tagId} {
+      allow read: if true;
+      allow create: if isValidId(tagId) &&
+                       isValidLocationTag(request.resource.data) &&
+                       (
+                         (request.resource.data.status == 'approved' && request.resource.data.createdByRole == 'admin') ||
+                         (request.resource.data.status == 'pending_approval' && request.resource.data.createdByRole in ['supervisor', 'ops_supervisor'])
+                       );
+      allow update: if isValidId(tagId) &&
+                       isValidLocationTag(request.resource.data) &&
+                       (
+                         (
+                           resource.data.status == 'pending_approval' &&
+                           request.resource.data.status in ['approved', 'rejected'] &&
+                           request.resource.data.approvedByRole == 'admin' &&
+                           request.resource.data.approvedById is string &&
+                           request.resource.data.approvedById.size() > 0 &&
+                           request.resource.data.approvedById != resource.data.createdById &&
+                           (request.resource.data.status != 'rejected' || (request.resource.data.rejectionReason is string && request.resource.data.rejectionReason.size() > 0))
+                         ) ||
+                         (
+                           resource.data.status == 'rejected' &&
+                           (
+                             (
+                               request.resource.data.status == 'pending_approval' &&
+                               request.resource.data.createdByRole in ['supervisor', 'ops_supervisor']
+                             ) ||
+                             (
+                               request.resource.data.status == 'approved' &&
+                               request.resource.data.approvedByRole == 'admin'
+                             )
+                           )
+                         ) ||
+                         (
+                           resource.data.status == 'approved' &&
+                           request.resource.data.status == 'approved' &&
+                           request.resource.data.createdByRole == 'admin'
+                         )
+                       );
+      allow delete: if isValidId(tagId);
+    }
+
+    // Store Count Finalization (Controls when Supervisor System Balance unlocks after 2nd counts are done)
+    match /count_finalizations/{finalizationId} {
+      allow read: if true;
+      allow create, update: if isValidId(finalizationId) &&
+                               isValidCountFinalization(request.resource.data) &&
+                               (
+                                 (
+                                   request.resource.data.status == 'finalized' &&
+                                   request.resource.data.finalizedById is string &&
+                                   request.resource.data.finalizedById.size() > 0 &&
+                                   request.resource.data.finalizedByRole in ['supervisor', 'ops_supervisor', 'admin']
+                                 ) ||
+                                 (
+                                   request.resource.data.status == 'counting' &&
+                                   request.resource.data.reopenedById is string &&
+                                   request.resource.data.reopenedById.size() > 0 &&
+                                   request.resource.data.reopenedByRole == 'admin'
+                                 )
+                               );
+      allow delete: if isValidId(finalizationId);
+    }
+
+    // Counting Sessions (Cycle Count vs Annual Inventory Count with Cut-Off Date)
+    match /counting_sessions/{sessionId} {
+      allow read: if true;
+      allow create: if isValidId(sessionId) &&
+                       isValidCountingSession(request.resource.data) &&
+                       request.resource.data.createdByRole in ['admin', 'supervisor', 'ops_supervisor'];
+      allow update: if isValidId(sessionId) &&
+                       isValidCountingSession(request.resource.data) &&
+                       request.resource.data.countType == resource.data.countType &&
+                       (
+                         (
+                           request.resource.data.status == 'closed' &&
+                           request.resource.data.closedById is string &&
+                           request.resource.data.closedById.size() > 0 &&
+                           request.resource.data.closedByRole in ['admin', 'supervisor', 'ops_supervisor']
+                         ) ||
+                         (
+                           request.resource.data.status == 'active' &&
+                           request.resource.data.reopenedById is string &&
+                           request.resource.data.reopenedById.size() > 0 &&
+                           request.resource.data.reopenedByRole == 'admin'
+                         )
+                       );
+      allow delete: if isValidId(sessionId);
     }
   }
 }

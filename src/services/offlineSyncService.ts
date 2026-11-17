@@ -1,6 +1,7 @@
 import { AppUser, InventoryCount, Store } from '../types/inventory';
 import { db } from '../firebase/config';
 import { appendImmutableAuditLog, recordCountSubmittedAuditLog } from './auditService';
+import { DEFAULT_ANNUAL_SESSION_ID, normalizeCountType } from './sessionService';
 import {
   collection,
   doc,
@@ -137,6 +138,11 @@ function parseCountDoc(id: string, d: Record<string, any>): InventoryCount {
     voidedAt: d.voidedAt,
     voidedBy: d.voidedBy,
     voidReason: d.voidReason,
+    countRound: d.countRound === 2 ? 2 : 1,
+    recountTaskId: d.recountTaskId,
+    countType: normalizeCountType(d.countType),
+    sessionId: d.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+    cutoffDate: d.cutoffDate || undefined,
   };
 }
 
@@ -153,6 +159,8 @@ export async function recordCount(
   const initialLoc = countData.location || '';
   const initialCond = countData.condition || 'Good';
   const initialRemarks = countData.remarks || '';
+  const resolvedCountType = normalizeCountType(countData.countType);
+  const resolvedSessionId = countData.sessionId || DEFAULT_ANNUAL_SESSION_ID;
 
   const newCount: InventoryCount = {
     ...countData,
@@ -161,10 +169,14 @@ export async function recordCount(
     syncStatus: 'pending',
     status: 'active',
     version: 1,
+    countRound: countData.countRound === 2 ? 2 : 1,
     originalQuantity: initialQty,
     originalLocation: initialLoc,
     originalCondition: initialCond,
     originalRemarks: initialRemarks,
+    countType: resolvedCountType,
+    sessionId: resolvedSessionId,
+    ...(countData.cutoffDate ? { cutoffDate: countData.cutoffDate } : {}),
   };
 
   // 1. Save to local history immediately
@@ -233,6 +245,11 @@ export async function syncPendingCounts(): Promise<{ synced: number; remaining: 
           item.originalLocation !== undefined ? item.originalLocation : item.location || '',
         originalCondition: item.originalCondition || (item.condition === 'Damage' ? 'Damage' : 'Good'),
         originalRemarks: item.originalRemarks !== undefined ? item.originalRemarks : item.remarks || '',
+        countRound: item.countRound === 2 ? 2 : 1,
+        ...(item.recountTaskId ? { recountTaskId: item.recountTaskId } : {}),
+        countType: normalizeCountType(item.countType),
+        sessionId: item.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+        ...(item.cutoffDate ? { cutoffDate: item.cutoffDate } : {}),
       });
 
       // Update syncStatus in local history

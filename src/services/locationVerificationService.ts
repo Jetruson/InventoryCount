@@ -1,5 +1,6 @@
 import {
   AppUser,
+  CountingSession,
   InventoryCount,
   LocationVerification,
   LocationVerificationStatus,
@@ -7,6 +8,7 @@ import {
 } from '../types/inventory';
 import { db, handleFirestoreError, OperationType } from '../firebase/config';
 import { appendImmutableAuditLog } from './auditService';
+import { DEFAULT_ANNUAL_SESSION_ID, normalizeCountType } from './sessionService';
 import {
   collection,
   doc,
@@ -36,12 +38,25 @@ function hashLocationString(str: string): string {
   return Math.abs(hash >>> 0).toString(36);
 }
 
-export function getLocationVerificationId(storeId: string, location: string): string {
-  const cleanStore = (storeId || 'STORE').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
+export function getLocationVerificationId(
+  storeId: string,
+  location: string,
+  sessionId?: string
+): string {
+  const cleanStore = (storeId || 'STORE').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 28);
   const normalizedLoc = (location || 'UNASSIGNED').trim().toLowerCase();
-  const cleanLoc = normalizedLoc.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48);
-  const hash = hashLocationString(`${storeId.trim().toLowerCase()}::${normalizedLoc}`);
-  return `LOCVER_${cleanStore}_${cleanLoc}_${hash}`.slice(0, 120);
+  const cleanSess = (sessionId || '').trim();
+  if (!cleanSess || cleanSess === DEFAULT_ANNUAL_SESSION_ID) {
+    const cleanLoc = normalizedLoc.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48);
+    const hash = hashLocationString(`${storeId.trim().toLowerCase()}::${normalizedLoc}`);
+    return `LOCVER_${cleanStore}_${cleanLoc}_${hash}`.slice(0, 120);
+  }
+  const sessPrefix = cleanSess.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 26);
+  const cleanLoc = normalizedLoc.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32);
+  const hash = hashLocationString(
+    `${cleanSess.toLowerCase()}::${storeId.trim().toLowerCase()}::${normalizedLoc}`
+  );
+  return `LOCVER_${sessPrefix}_${cleanStore}_${cleanLoc}_${hash}`.slice(0, 120);
 }
 
 export function getLocalLocationVerifications(): LocationVerification[] {
@@ -104,6 +119,9 @@ function parseVerificationDoc(id: string, d: Record<string, any>): LocationVerif
     verifiedTime: d.verifiedTime,
     supervisorNotes: d.supervisorNotes,
     doneCounting: d.status === 'verified' || d.doneCounting === true,
+    countType: normalizeCountType(d.countType),
+    sessionId: d.sessionId || DEFAULT_ANNUAL_SESSION_ID,
+    cutoffDate: d.cutoffDate || undefined,
   };
 }
 
@@ -144,8 +162,9 @@ export async function submitLocationForVerification(params: {
   countsForLocation: InventoryCount[];
   user: AppUser;
   counterNotes?: string;
+  session?: Pick<CountingSession, 'id' | 'countType' | 'cutoffDate'>;
 }): Promise<LocationVerification> {
-  const { store, location, countsForLocation, user, counterNotes } = params;
+  const { store, location, countsForLocation, user, counterNotes, session } = params;
   const trimmedLoc = location.trim();
   if (!trimmedLoc) {
     throw new Error('Location cannot be empty.');
@@ -158,7 +177,9 @@ export async function submitLocationForVerification(params: {
 
   const totalUnits = activeCounts.reduce((sum, c) => sum + (Number(c.countedQuantity) || 0), 0);
   const sys = getSystemDateTime();
-  const id = getLocationVerificationId(store.storeId, trimmedLoc);
+  const resolvedSessionId = session?.id || DEFAULT_ANNUAL_SESSION_ID;
+  const resolvedCountType = normalizeCountType(session?.countType);
+  const id = getLocationVerificationId(store.storeId, trimmedLoc, resolvedSessionId);
 
   const verification: LocationVerification = {
     id,
@@ -176,6 +197,9 @@ export async function submitLocationForVerification(params: {
     itemCountSnapshot: activeCounts.length,
     totalUnitsSnapshot: totalUnits,
     doneCounting: false,
+    countType: resolvedCountType,
+    sessionId: resolvedSessionId,
+    cutoffDate: session?.cutoffDate,
   };
 
   const existing = getLocalLocationVerifications().filter((v) => v.id !== id);
@@ -206,6 +230,9 @@ export async function submitLocationForVerification(params: {
       `Counter finished counting ${trimmedLoc} and submitted for supervisor check`,
     requestedBy: user.displayName || user.email,
     requestedById: user.uid,
+    countType: resolvedCountType,
+    sessionId: resolvedSessionId,
+    cutoffDate: session?.cutoffDate,
   });
 
   return verification;
@@ -220,6 +247,7 @@ export async function reviewLocationVerification(params: {
   supervisorNotes?: string;
   countsForLocation: InventoryCount[];
   existingVerification?: LocationVerification;
+  session?: Pick<CountingSession, 'id' | 'countType' | 'cutoffDate'>;
 }): Promise<LocationVerification> {
   const {
     storeId,
@@ -230,6 +258,7 @@ export async function reviewLocationVerification(params: {
     supervisorNotes,
     countsForLocation,
     existingVerification,
+    session,
   } = params;
 
   if (supervisor.role !== 'supervisor' && supervisor.role !== 'ops_supervisor') {
@@ -258,7 +287,15 @@ export async function reviewLocationVerification(params: {
   const activeCounts = countsForLocation.filter((c) => c.status !== 'voided');
   const totalUnits = activeCounts.reduce((sum, c) => sum + (Number(c.countedQuantity) || 0), 0);
   const sys = getSystemDateTime();
-  const id = existingVerification?.id || getLocationVerificationId(storeId, trimmedLoc);
+  const resolvedSessionId =
+    existingVerification?.sessionId || session?.id || DEFAULT_ANNUAL_SESSION_ID;
+  const resolvedCountType = normalizeCountType(
+    existingVerification?.countType || session?.countType
+  );
+  const resolvedCutoff = existingVerification?.cutoffDate || session?.cutoffDate;
+  const id =
+    existingVerification?.id ||
+    getLocationVerificationId(storeId, trimmedLoc, resolvedSessionId);
 
   const verification: LocationVerification = {
     id,
@@ -283,6 +320,9 @@ export async function reviewLocationVerification(params: {
     verifiedTime: sys.time,
     supervisorNotes: trimmedNotes,
     doneCounting: decision === 'verified',
+    countType: resolvedCountType,
+    sessionId: resolvedSessionId,
+    cutoffDate: resolvedCutoff,
   };
 
   const existing = getLocalLocationVerifications().filter((v) => v.id !== id);
@@ -320,6 +360,9 @@ export async function reviewLocationVerification(params: {
     requestedById: verification.submittedById,
     reviewedBy: supervisor.displayName || supervisor.email,
     reviewedById: supervisor.uid,
+    countType: resolvedCountType,
+    sessionId: resolvedSessionId,
+    cutoffDate: resolvedCutoff,
   });
 
   return verification;
